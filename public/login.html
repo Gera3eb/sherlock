@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sherlock · Top Oncology — Acceso</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --petrol:#0E5E63; --petrol-deep:#08383B; --petrol-700:#0A4A4E;
+  --ink:#16242B; --slate:#46606A; --muted:#7C949C; --line:#DCE6E6;
+  --mist:#F2F6F6; --paper:#FFFFFF; --brass:#C2883A; --brass-soft:#F4E7CF; --brass-deep:#9A6A24;
+  --danger:#C2453D; --danger-soft:#F7E3E1;
+  --serif:"Fraunces",Georgia,"Cambria",serif;
+  --sans:"Inter",-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--sans);color:var(--ink);background:var(--mist);-webkit-font-smoothing:antialiased;line-height:1.45;font-size:14px}
+button{font-family:inherit;cursor:pointer;border:none}
+input{font-family:inherit;font-size:14px;color:var(--ink)}
+.login-wrap{min-height:100vh;display:grid;grid-template-columns:1.05fr .95fr}
+.login-art{background:linear-gradient(160deg,var(--petrol-deep),#062a2d 60%,#04211f);color:#fff;padding:54px 56px;display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden}
+.glow{position:absolute;width:520px;height:520px;border-radius:50%;background:radial-gradient(circle,rgba(46,143,148,.45),transparent 62%);top:-120px;right:-130px;filter:blur(8px)}
+.glow2{position:absolute;width:360px;height:360px;border-radius:50%;background:radial-gradient(circle,rgba(194,136,58,.18),transparent 62%);bottom:-90px;left:-60px}
+.brand{display:flex;align-items:center;gap:12px}
+.mark{width:40px;height:40px;border-radius:11px;background:radial-gradient(circle at 32% 30%,#1E8A8F,#0c4f53);display:grid;place-items:center;flex:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)}
+.mark svg{width:22px;height:22px}
+.wm{font-family:var(--serif);font-weight:600;font-size:25px;letter-spacing:.2px;color:#fff;line-height:1}
+.la-hero{position:relative;z-index:2;max-width:450px}
+.h-eyebrow{font-size:11px;letter-spacing:1.6px;text-transform:uppercase;color:var(--brass);font-weight:600}
+.la-hero h1{font-family:var(--serif);font-weight:500;font-size:38px;line-height:1.12;letter-spacing:.2px;margin-top:14px}
+.la-hero h1 em{font-style:italic;color:var(--brass)}
+.la-hero p{color:#9FC6C5;margin-top:18px;font-size:15px;line-height:1.6}
+.la-feats{position:relative;z-index:2;display:flex;flex-direction:column;gap:14px}
+.la-feat{display:flex;gap:13px;align-items:flex-start}
+.la-feat .ic{width:34px;height:34px;border-radius:10px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);display:grid;place-items:center;flex:none}
+.la-feat .ic svg{width:17px;height:17px;color:var(--brass)}
+.la-feat b{color:#fff;font-size:13.5px;font-weight:600}
+.la-feat span{display:block;color:#84AEAD;font-size:12px;margin-top:1px}
+.la-foot{position:relative;z-index:2;font-size:11.5px;color:#5E8C8C;letter-spacing:.3px}
+.login-form{background:var(--paper);display:grid;place-items:center;padding:40px}
+.login-card{width:100%;max-width:372px}
+.h2{font-family:var(--serif);font-weight:600;font-size:23px;color:var(--ink)}
+.lead{color:var(--slate);font-size:14px}
+.field{margin-bottom:15px}
+.field label{display:block;font-size:12px;font-weight:600;color:var(--slate);margin-bottom:6px}
+.input{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:#fff;outline:none;transition:.14s}
+.input:focus{border-color:var(--petrol);box-shadow:0 0 0 3px rgba(14,94,99,.10)}
+.btn-primary{width:100%;justify-content:center;display:flex;align-items:center;gap:8px;background:var(--petrol);color:#fff;padding:13px 16px;border-radius:11px;font-weight:600;font-size:14px;transition:.14s}
+.btn-primary:hover{background:var(--petrol-700)}
+.err{background:var(--danger-soft);border:1px solid #ECC9C6;color:#9c352f;border-radius:10px;padding:10px 13px;font-size:12.5px;margin-bottom:16px;display:none;align-items:center;gap:8px}
+.err.show{display:flex}
+.muted-link{font-size:12.5px;color:var(--muted)}
+@media (max-width:980px){.login-wrap{grid-template-columns:1fr}.login-art{display:none}}
+</style>
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-art">
+    <div class="glow"></div><div class="glow2"></div>
+    <div class="brand">
+      <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#CFEDEC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="6"/><path d="M20 20l-5.5-5.5"/><path d="M10 7v6M7 10h6" stroke="#C2883A"/></svg></div>
+      <div class="wm">Sherlock</div>
+    </div>
+    <div class="la-hero">
+      <div class="h-eyebrow">Top Oncology · Hospital Ángeles Pedregal</div>
+      <h1>El expediente que <em>deduce</em> la etapa clínica a partir de la evidencia.</h1>
+      <p>Diseñado con oncólogos, para oncólogos. Historia clínica estructurada, estadificación TNM asistida y reportes listos para seguros — en un flujo pensado para mama y extensible a cada cáncer.</p>
+    </div>
+    <div class="la-feats">
+      <div class="la-feat"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg></div><div><b>Estadificación asistida</b><span>TNM y etapa clínica calculadas a partir de los hallazgos.</span></div></div>
+      <div class="la-feat"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2c0 6 16 6 16 14M4 22c0-6 16-6 16-14M6 6h12M6 18h12"/></svg></div><div><b>Perfil molecular integrado</b><span>RE, RP, HER2, Ki-67 y estudios genómicos en un solo lugar.</span></div></div>
+      <div class="la-feat"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg></div><div><b>Datos sensibles protegidos</b><span>Cifrado, control por médico y bitácora de acceso.</span></div></div>
+    </div>
+    <div class="la-foot">Top Oncology® · Plataforma desarrollada por Simplexity</div>
+  </div>
+
+  <div class="login-form">
+    <form class="login-card" method="POST" action="/login" autocomplete="on">
+      <div class="h-eyebrow" style="color:var(--brass-deep)">Acceso al portal</div>
+      <div class="h2" style="margin-top:6px">Bienvenido</div>
+      <p class="lead" style="margin-bottom:22px">Ingresa con tu usuario y contraseña.</p>
+      <div class="err" id="err"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg> Usuario o contraseña incorrectos.</div>
+      <div class="field"><label for="username">Usuario</label><input class="input" id="username" name="username" placeholder="tu.usuario" autocapitalize="none" autocomplete="username" required></div>
+      <div class="field"><label for="password">Contraseña</label><input class="input" id="password" name="password" type="password" placeholder="••••••••" autocomplete="current-password" required></div>
+      <button class="btn-primary" type="submit">Acceder al portal</button>
+      <div style="text-align:center;margin-top:14px"><a class="muted-link" href="mailto:soporte@simplexitypro.com">¿Olvidaste tu contraseña?</a></div>
+    </form>
+  </div>
+</div>
+<script>
+  if(new URLSearchParams(location.search).get('e')) document.getElementById('err').classList.add('show');
+</script>
+</body>
+</html>

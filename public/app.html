@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sherlock · Top Oncology — Expediente Oncológico</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --petrol:#0E5E63; --petrol-deep:#08383B; --petrol-700:#0A4A4E;
+  --ink:#16242B; --slate:#46606A; --muted:#7C949C; --line:#DCE6E6;
+  --mist:#F2F6F6; --paper:#FFFFFF; --paper-2:#F8FBFB;
+  --brass:#C2883A; --brass-soft:#F4E7CF; --brass-deep:#9A6A24;
+  --ok:#1F9D6B; --ok-soft:#E2F3EB; --warn:#C77A1B; --warn-soft:#FBEEDB;
+  --danger:#C2453D; --danger-soft:#F7E3E1; --info:#2D6E8E;
+  --r:14px; --r-sm:9px; --r-lg:20px;
+  --sh-1:0 1px 2px rgba(8,56,59,.06),0 1px 3px rgba(8,56,59,.05);
+  --sh-2:0 6px 22px -8px rgba(8,56,59,.22);
+  --sh-3:0 22px 50px -18px rgba(8,56,59,.30);
+  --serif:"Fraunces",Georgia,"Cambria",serif;
+  --sans:"Inter",-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+  --mono:"JetBrains Mono","Consolas",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--sans);color:var(--ink);background:var(--mist);-webkit-font-smoothing:antialiased;line-height:1.45;font-size:14px}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,select,textarea{font-family:inherit;font-size:14px;color:var(--ink)}
+::selection{background:var(--brass-soft)}
+.mono{font-family:var(--mono)}
+a{color:var(--petrol);text-decoration:none}
+
+/* ============ SHELL ============ */
+#app{min-height:100vh}
+.app-shell{display:grid;grid-template-columns:248px 1fr;min-height:100vh}
+.sidebar{background:linear-gradient(178deg,var(--petrol-deep),#062b2e);color:#CFE3E2;display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+.brand{padding:22px 22px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(255,255,255,.07)}
+.brand .mark{width:38px;height:38px;border-radius:11px;background:radial-gradient(circle at 32% 30%,#1E8A8F,#0c4f53);display:grid;place-items:center;flex:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)}
+.brand .mark svg{width:21px;height:21px}
+.brand .wm{font-family:var(--serif);font-weight:600;font-size:21px;letter-spacing:.2px;color:#fff;line-height:1}
+.brand .wm small{display:block;font-family:var(--sans);font-weight:500;font-size:9.5px;letter-spacing:1.8px;color:#7FB4B3;text-transform:uppercase;margin-top:3px}
+.nav{padding:14px 12px;flex:1;overflow:auto}
+.nav-label{font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:#5E8C8C;padding:14px 12px 7px}
+.nav-item{display:flex;align-items:center;gap:11px;padding:9.5px 12px;border-radius:10px;color:#BBD6D5;font-weight:500;font-size:13.5px;width:100%;text-align:left;margin-bottom:1px;transition:.13s}
+.nav-item svg{width:17px;height:17px;opacity:.85;flex:none}
+.nav-item:hover{background:rgba(255,255,255,.06);color:#fff}
+.nav-item.active{background:rgba(255,255,255,.10);color:#fff;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
+.nav-item.active svg{opacity:1;color:var(--brass)}
+.side-foot{padding:14px;border-top:1px solid rgba(255,255,255,.07)}
+.sec-badge{display:flex;align-items:center;gap:9px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:11px;padding:10px 12px;font-size:11.5px;color:#9FC6C5}
+.sec-badge svg{width:15px;height:15px;color:var(--ok);flex:none}
+
+.main{display:flex;flex-direction:column;min-width:0}
+.topbar{height:62px;background:rgba(255,255,255,.86);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:16px;padding:0 26px;position:sticky;top:0;z-index:30}
+.searchbox{flex:1;max-width:380px;display:flex;align-items:center;gap:9px;background:var(--mist);border:1px solid var(--line);border-radius:11px;padding:8.5px 13px;color:var(--muted)}
+.searchbox svg{width:15px;height:15px}
+.searchbox input{border:none;background:none;outline:none;flex:1;color:var(--ink)}
+.role-toggle{display:flex;background:var(--mist);border:1px solid var(--line);border-radius:10px;padding:3px}
+.role-toggle button{padding:6px 13px;border-radius:7px;font-size:12.5px;font-weight:600;color:var(--slate)}
+.role-toggle button.on{background:#fff;color:var(--petrol);box-shadow:var(--sh-1)}
+.doc-chip{display:flex;align-items:center;gap:10px;padding:5px 7px 5px 5px;border-radius:30px;border:1px solid var(--line);background:#fff}
+.doc-chip .av{width:32px;height:32px;border-radius:50%;background:var(--petrol);color:#fff;display:grid;place-items:center;font-weight:600;font-size:12.5px}
+.doc-chip .nm{font-size:12.5px;font-weight:600;line-height:1.15}
+.doc-chip .sp{font-size:10.5px;color:var(--muted)}
+.canvas{padding:26px 30px 60px;flex:1;overflow:auto}
+.maxw{max-width:1120px;margin:0 auto}
+
+/* ============ TYPO / PRIMS ============ */
+.h-eyebrow{font-size:11px;letter-spacing:1.6px;text-transform:uppercase;color:var(--brass-deep);font-weight:600}
+.h1{font-family:var(--serif);font-weight:600;font-size:27px;letter-spacing:.1px;color:var(--ink)}
+.h2{font-family:var(--serif);font-weight:600;font-size:18px;color:var(--ink)}
+.section-title{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--slate);font-weight:700}
+.lead{color:var(--slate);font-size:14px}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh-1)}
+.pad{padding:20px 22px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:11px;font-weight:600;font-size:13.5px;transition:.14s;border:1px solid transparent}
+.btn svg{width:16px;height:16px}
+.btn-primary{background:var(--petrol);color:#fff;box-shadow:var(--sh-1)}
+.btn-primary:hover{background:var(--petrol-700)}
+.btn-ghost{background:#fff;border-color:var(--line);color:var(--slate)}
+.btn-ghost:hover{border-color:var(--petrol);color:var(--petrol)}
+.btn-brass{background:var(--brass);color:#fff}
+.btn-brass:hover{background:var(--brass-deep)}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;padding:4px 10px;border-radius:30px}
+.chip-ok{background:var(--ok-soft);color:#157a52}
+.chip-warn{background:var(--warn-soft);color:var(--warn)}
+.chip-info{background:#E2EFF4;color:var(--info)}
+.chip-brass{background:var(--brass-soft);color:var(--brass-deep)}
+.chip-line{background:#fff;border:1px solid var(--line);color:var(--slate)}
+.divider{height:1px;background:var(--line);margin:18px 0}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12px;font-weight:600;color:var(--slate);margin-bottom:6px}
+.field .hint{font-size:11px;color:var(--muted);font-weight:400}
+.input,.select,textarea.input{width:100%;padding:9.5px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;outline:none;transition:.14s}
+.input:focus,.select:focus,textarea.input:focus{border-color:var(--petrol);box-shadow:0 0 0 3px rgba(14,94,99,.10)}
+.select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2346606A' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center;padding-right:30px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 22px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 18px}
+.tablecard{width:100%;border-collapse:collapse;font-size:13px}
+.tablecard th{text-align:left;font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);font-weight:700;padding:10px 12px;border-bottom:1px solid var(--line)}
+.tablecard td{padding:11px 12px;border-bottom:1px solid var(--paper-2)}
+.tablecard tr:hover td{background:var(--paper-2)}
+
+/* ============ LOGIN ============ */
+.login-wrap{min-height:100vh;display:grid;grid-template-columns:1.05fr .95fr}
+.login-art{background:linear-gradient(160deg,var(--petrol-deep),#062a2d 60%,#04211f);color:#fff;padding:54px 56px;display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden}
+.login-art .glow{position:absolute;width:520px;height:520px;border-radius:50%;background:radial-gradient(circle,rgba(46,143,148,.45),transparent 62%);top:-120px;right:-130px;filter:blur(8px)}
+.login-art .glow2{position:absolute;width:360px;height:360px;border-radius:50%;background:radial-gradient(circle,rgba(194,136,58,.18),transparent 62%);bottom:-90px;left:-60px}
+.login-art .brand{border:none;padding:0}
+.login-art .wm{font-size:25px}
+.la-hero{position:relative;z-index:2;max-width:440px}
+.la-hero h1{font-family:var(--serif);font-weight:500;font-size:38px;line-height:1.12;letter-spacing:.2px}
+.la-hero h1 em{font-style:italic;color:var(--brass)}
+.la-hero p{color:#9FC6C5;margin-top:18px;font-size:15px;line-height:1.6}
+.la-feats{position:relative;z-index:2;display:flex;flex-direction:column;gap:14px}
+.la-feat{display:flex;gap:13px;align-items:flex-start}
+.la-feat .ic{width:34px;height:34px;border-radius:10px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);display:grid;place-items:center;flex:none}
+.la-feat .ic svg{width:17px;height:17px;color:var(--brass)}
+.la-feat b{color:#fff;font-size:13.5px;font-weight:600}
+.la-feat span{display:block;color:#84AEAD;font-size:12px;margin-top:1px}
+.login-form{background:var(--paper);display:grid;place-items:center;padding:40px}
+.login-card{width:100%;max-width:368px}
+.login-card .h2{font-size:23px;margin-bottom:5px}
+.demo-pill{margin-top:22px;background:var(--brass-soft);border:1px solid #E8D3A7;border-radius:11px;padding:11px 14px;font-size:12px;color:var(--brass-deep);display:flex;gap:9px;align-items:flex-start}
+.demo-pill svg{width:15px;height:15px;flex:none;margin-top:1px}
+
+/* ============ AGENDA ============ */
+.agenda-grid{display:grid;grid-template-columns:1fr 320px;gap:22px;align-items:start}
+.cal-row{display:flex;gap:14px;padding:13px 14px;border-radius:12px;border:1px solid var(--line);background:#fff;align-items:center;margin-bottom:9px;transition:.13s}
+.cal-row:hover{box-shadow:var(--sh-2);transform:translateY(-1px)}
+.cal-time{font-family:var(--mono);font-size:12px;color:var(--slate);width:52px;flex:none;font-weight:600}
+.cal-bar{width:3px;align-self:stretch;border-radius:3px;flex:none}
+.cal-main b{font-size:13.5px;display:block}
+.cal-main span{font-size:12px;color:var(--muted)}
+
+/* ============ PATIENT ============ */
+.patient-row{display:flex;align-items:center;gap:14px;padding:14px;border-radius:12px;border:1px solid var(--line);background:#fff;margin-bottom:9px;transition:.13s;width:100%;text-align:left}
+.patient-row:hover{box-shadow:var(--sh-2);transform:translateY(-1px);border-color:#C9DBDB}
+.p-av{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;font-weight:600;color:#fff;flex:none;font-size:14px}
+.phead{display:flex;align-items:center;gap:16px;background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:16px 20px;box-shadow:var(--sh-1);margin-bottom:18px}
+.phead .p-av{width:52px;height:52px;border-radius:14px;font-size:17px}
+.tabs{display:flex;gap:2px;background:var(--mist);border:1px solid var(--line);border-radius:13px;padding:4px;margin-bottom:20px;overflow:auto}
+.tab{padding:9px 15px;border-radius:9px;font-size:13px;font-weight:600;color:var(--slate);white-space:nowrap;display:flex;align-items:center;gap:7px}
+.tab svg{width:15px;height:15px}
+.tab.on{background:#fff;color:var(--petrol);box-shadow:var(--sh-1)}
+.acc{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;overflow:hidden;background:#fff}
+.acc-head{display:flex;align-items:center;gap:12px;padding:14px 16px;width:100%;text-align:left}
+.acc-head .tt{font-weight:600;font-size:13.5px;flex:1}
+.acc-head .st{font-size:12px;color:var(--muted)}
+.acc-body{padding:0 16px 16px;border-top:1px solid var(--paper-2)}
+.flag{width:8px;height:8px;border-radius:50%;flex:none}
+
+/* vitals */
+.vital{display:grid;grid-template-columns:170px 130px 1fr;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--paper-2)}
+.vital .vl{font-size:13px;font-weight:600;color:var(--ink)}
+.vital .vr{font-size:11.5px;color:var(--muted)}
+.calc-card{background:linear-gradient(160deg,#0c4f53,#08383B);color:#fff;border-radius:14px;padding:18px 20px}
+.calc-card .cv{font-family:var(--mono);font-size:30px;font-weight:600;color:#fff;line-height:1}
+.calc-card .cl{font-size:11px;color:#8FBDBC;letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px}
+.calc-card .cf{font-size:11px;color:#A8CFCE;margin-top:6px;font-family:var(--mono)}
+
+/* staging engine */
+.stage-engine{background:linear-gradient(165deg,#0d5256,#08383B);border-radius:var(--r-lg);padding:0;overflow:hidden;box-shadow:var(--sh-3);position:relative}
+.se-head{padding:18px 22px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(255,255,255,.08)}
+.se-head .ic{width:36px;height:36px;border-radius:11px;background:rgba(194,136,58,.18);border:1px solid rgba(194,136,58,.35);display:grid;place-items:center;flex:none}
+.se-head .ic svg{width:19px;height:19px;color:var(--brass)}
+.se-head .tt{font-family:var(--serif);font-weight:600;font-size:16px;color:#fff}
+.se-head .sb{font-size:11.5px;color:#8FBDBC}
+.se-body{padding:18px 22px}
+.deduce{display:flex;gap:11px;align-items:flex-start;padding:9px 0;opacity:0;transform:translateX(-6px);animation:slidein .4s forwards}
+@keyframes slidein{to{opacity:1;transform:none}}
+.deduce .dn{width:22px;height:22px;border-radius:50%;background:rgba(255,255,255,.08);display:grid;place-items:center;flex:none;font-size:11px;font-family:var(--mono);color:var(--brass);font-weight:600;margin-top:1px}
+.deduce .dt{font-size:13px;color:#D7E8E7;line-height:1.5}
+.deduce .dt b{color:#fff;font-family:var(--mono);background:rgba(194,136,58,.16);padding:1px 7px;border-radius:6px;font-weight:600}
+.tnm-out{display:flex;gap:12px;margin-top:6px}
+.tnm-box{flex:1;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:13px;text-align:center}
+.tnm-box .k{font-size:10px;letter-spacing:1px;color:#7FB4B3;text-transform:uppercase}
+.tnm-box .v{font-family:var(--mono);font-size:24px;font-weight:600;color:#fff;margin-top:3px}
+.stage-final{margin-top:16px;background:linear-gradient(100deg,var(--brass),#b07a2e);border-radius:14px;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;color:#fff}
+.stage-final .sl{font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:rgba(255,255,255,.8)}
+.stage-final .sv{font-family:var(--serif);font-size:30px;font-weight:600;line-height:1}
+.stage-final .sd{font-size:12px;color:rgba(255,255,255,.85);max-width:230px;text-align:right}
+
+.seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{flex:1;padding:8px;font-size:12.5px;font-weight:600;color:var(--slate);background:#fff;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:none}
+.seg button.on{background:var(--petrol);color:#fff}
+.bio-row{display:grid;grid-template-columns:1fr 110px;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--paper-2)}
+.bio-row .bl{font-size:13px;font-weight:500}
+
+/* report */
+.report{background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh-2);padding:0;overflow:hidden}
+.rep-head{padding:24px 30px;border-bottom:2px solid var(--petrol);display:flex;justify-content:space-between;align-items:flex-start}
+.rep-body{padding:26px 30px}
+.rep-sec{margin-bottom:18px}
+.rep-sec h4{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--brass-deep);font-weight:700;margin-bottom:7px}
+.rep-sec p{font-size:13.5px;color:var(--ink);line-height:1.6}
+.rep-foot{padding:20px 30px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:flex-end;color:var(--slate);font-size:12px}
+.sig{border-top:1px solid var(--ink);padding-top:6px;width:230px;text-align:center;font-size:12px}
+
+/* security */
+.sec-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.sec-tile{display:flex;gap:14px;padding:18px;border:1px solid var(--line);border-radius:14px;background:#fff}
+.sec-tile .ic{width:40px;height:40px;border-radius:11px;background:var(--ok-soft);display:grid;place-items:center;flex:none}
+.sec-tile .ic svg{width:20px;height:20px;color:var(--ok)}
+.sec-tile h4{font-size:14px;font-weight:600;margin-bottom:4px}
+.sec-tile p{font-size:12.5px;color:var(--slate);line-height:1.5}
+
+/* ipad assistant */
+.ipad{max-width:560px;margin:8px auto;background:#fff;border:1px solid var(--line);border-radius:26px;box-shadow:var(--sh-3);overflow:hidden}
+.ipad-head{background:var(--petrol-deep);color:#fff;padding:18px 24px}
+.ipad-body{padding:24px}
+.toggle-big{display:flex;gap:10px}
+.toggle-big button{flex:1;padding:15px;border-radius:14px;border:1.5px solid var(--line);font-size:15px;font-weight:600;color:var(--slate);background:#fff}
+.toggle-big button.on{border-color:var(--petrol);background:var(--paper-2);color:var(--petrol);box-shadow:inset 0 0 0 1px var(--petrol)}
+.fam-card{border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
+
+/* note */
+.note{background:var(--brass-soft);border:1px solid #E8D3A7;border-radius:12px;padding:13px 15px;font-size:12.5px;color:var(--brass-deep);display:flex;gap:10px;align-items:flex-start}
+.note svg{width:16px;height:16px;flex:none;margin-top:1px}
+.kpi{display:flex;gap:16px}
+.kpi .k{flex:1;background:#fff;border:1px solid var(--line);border-radius:13px;padding:16px}
+.kpi .kv{font-family:var(--serif);font-size:26px;font-weight:600;color:var(--petrol)}
+.kpi .kl{font-size:11.5px;color:var(--muted);margin-top:2px}
+.fade{animation:fade .35s ease}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (max-width:980px){
+  .app-shell{grid-template-columns:1fr}.sidebar{display:none}
+  .login-wrap{grid-template-columns:1fr}.login-art{display:none}
+  .agenda-grid,.sec-grid{grid-template-columns:1fr}.grid2,.grid3{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* ============================================================
+   SHERLOCK — Demo de Expediente Oncológico Inteligente
+   Top Oncology · Hospital Ángeles Pedregal
+   ============================================================ */
+
+const ICN = {
+  glass:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>',
+  calendar:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
+  users:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  pulse:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>',
+  microscope:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h8M3 22h18M14 22a7 7 0 1 0 0-14h-1"/><path d="M9 14h2M9 12a2 2 0 0 1-2-2V6h4v4a2 2 0 0 1-2 2zM12 6V3a1 1 0 0 0-1-1H9a1 1 0 0 0-1 1v3"/></svg>',
+  dna:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2c0 6 16 6 16 14M4 22c0-6 16-6 16-14M6 6h12M6 18h12M9 4v2M15 4v2M9 18v2M15 18v2"/></svg>',
+  target:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg>',
+  doc:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>',
+  shield:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>',
+  lock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+  layers:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/></svg>',
+  plus:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>',
+  back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>',
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  info:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
+  pdf:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>',
+  google:'<svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.5 12.2c0-.7-.1-1.4-.2-2H12v3.8h5.9a5 5 0 0 1-2.2 3.3v2.8h3.6c2.1-2 3.2-4.8 3.2-7.9z"/><path fill="#34A853" d="M12 23c2.9 0 5.4-1 7.2-2.6l-3.6-2.8c-1 .7-2.3 1.1-3.6 1.1-2.8 0-5.1-1.9-6-4.4H2.3v2.8A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M6 14.3a6.6 6.6 0 0 1 0-4.2V7.3H2.3a11 11 0 0 0 0 9.8z"/><path fill="#EA4335" d="M12 5.5c1.6 0 3 .5 4.1 1.6l3.1-3.1A11 11 0 0 0 2.3 7.3L6 10.1c.9-2.6 3.2-4.6 6-4.6z"/></svg>',
+  print:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>',
+  spark:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M5 12H2M22 12h-3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/><circle cx="12" cy="12" r="3"/></svg>'
+};
+
+const DOCTORS = {
+  soto:{id:'soto',name:'Dr. Santos Soto',spec:'Cirugía oncológica de mama',ini:'SS',cedula:'7345xxxx',ced_esp:'1029xxxx'},
+  escobar:{id:'escobar',name:'Dra. Elizabeth Escobar',spec:'Oncología médica',ini:'EE',cedula:'5521xxxx',ced_esp:'8847xxxx'}
+};
+const AV_COLORS=['#0E5E63','#9A6A24','#2D6E8E','#6A4E8E','#1F7A57','#A24A4A'];
+
+const PATIENTS=[
+  {id:'sara',n:'Sara Méndez Rojas',sx:'F',age:54,dx:'Carcinoma ductal infiltrante de mama',tag:'Activo · Etapa IIA',doc:'soto',c:0,featured:true},
+  {id:'monika',n:'Mónika Brunger',sx:'F',age:61,dx:'Carcinoma lobulillar de mama',tag:'En quimioterapia (Ciclo 1)',doc:'escobar',c:2},
+  {id:'lidia',n:'Lidia Mata Cervantes',sx:'F',age:58,dx:'Carcinoma de mama HER2+',tag:'En quimioterapia · 1182 D2',doc:'escobar',c:4},
+  {id:'hector',n:'Héctor Barri Pérez',sx:'M',age:68,dx:'Adenocarcinoma de próstata',tag:'En estudio',doc:'escobar',c:1},
+  {id:'fernando',n:'Fernando Argüelles',sx:'M',age:70,dx:'Carcinoma colorrectal',tag:'Seguimiento',doc:'escobar',c:3},
+];
+
+const AGENDA=[
+  {t:'07:00',n:'Héctor Barri',d:'Q.T · SLP Ciclo 3',c:'#9A6A24'},
+  {t:'08:15',n:'Fernando Argüelles',d:'Q.T · HAP C12 D1',c:'#9A6A24'},
+  {t:'09:00',n:'Patricia Pérez Hdz',d:'Q.T · HAP',c:'#9A6A24'},
+  {t:'11:00',n:'Jorge Rueda',d:'Consulta de valoración',c:'#0E5E63'},
+  {t:'11:00',n:'Mónika Brunger',d:'Zometa 1 · 1182',c:'#2D6E8E'},
+  {t:'11:15',n:'Lidia Mata',d:'Neupogen · 1182 D2',c:'#2D6E8E'},
+  {t:'12:00',n:'Enriqueta Ontiveros',d:'Consulta de valoración',c:'#0E5E63'},
+  {t:'13:00',n:'Esther Beatriz Arrieta',d:'Q.T · HAP C1',c:'#9A6A24'},
+];
+
+const SUBTIPOS=['Carcinoma invasivo de tipo no especial (NST)','Carcinoma lobulillar invasivo','Carcinoma tubular','Carcinoma cribiforme','Carcinoma mucinoso','Carcinoma micropapilar','Carcinoma metaplásico','Carcinoma con diferenciación apocrina','Carcinoma papilar encapsulado','Carcinoma medular','Enfermedad de Paget'];
+
+const STUDIES={
+  lab:[{f:'04 Ago 2025',e:'Biometría hemática completa'},{f:'04 Ago 2025',e:'Química sanguínea 24 elementos'},{f:'28 Jul 2025',e:'Marcadores tumorales (CA 15-3)'}],
+  pat:[{f:'21 Jul 2025',e:'Biopsia con aguja de corte (BAG)'},{f:'24 Jul 2025',e:'Inmunohistoquímica RE/RP/HER2/Ki-67'}],
+  img:[{f:'18 Jul 2025',e:'Mastografía bilateral · BIRADS 5'},{f:'18 Jul 2025',e:'Ultrasonido mamario y axilar'},{f:'02 Ago 2025',e:'PET-CT de estadificación'}],
+  mol:[{f:'10 Ago 2025',e:'Panel genómico (perfil de expresión)'},{f:'10 Ago 2025',e:'Estudio de mutación BRCA1/2'}]
+};
+
+/* ---------- STAGING ENGINE (AJCC mama, anatómico) ---------- */
+function computeT(s){
+  if(s.inflam) return {v:'T4d',r:'Carcinoma inflamatorio presente'};
+  if(s.skin&&s.chest) return {v:'T4c',r:'Infiltra piel y pared torácica'};
+  if(s.chest) return {v:'T4a',r:'Infiltra pared torácica'};
+  if(s.skin) return {v:'T4b',r:'Infiltra piel (ulceración / nódulos satélite / edema)'};
+  const mm=parseFloat(s.size);
+  if(isNaN(mm)||mm<=0) return {v:'Tis/T0',r:'Sin tumor invasor medible'};
+  if(mm<=1) return {v:'T1mi',r:'Tamaño ≤ 1 mm'};
+  if(mm<=5) return {v:'T1a',r:'Tamaño '+mm+' mm (> 1 y ≤ 5 mm)'};
+  if(mm<=10) return {v:'T1b',r:'Tamaño '+mm+' mm (> 5 y ≤ 10 mm)'};
+  if(mm<=20) return {v:'T1c',r:'Tamaño '+mm+' mm (> 10 y ≤ 20 mm)'};
+  if(mm<=50) return {v:'T2',r:'Tamaño '+mm+' mm (> 20 y ≤ 50 mm)'};
+  return {v:'T3',r:'Tamaño '+mm+' mm (> 50 mm)'};
+}
+function computeN(s){
+  if(s.supracl) return {v:'N3c',r:'Adenopatías supraclaviculares ipsilaterales'};
+  if(s.intmam&&s.axilar) return {v:'N3b',r:'Mamaria interna + axilares ipsilaterales'};
+  if(s.infracl) return {v:'N3a',r:'Adenopatías infraclaviculares ipsilaterales'};
+  if(s.intmam) return {v:'N2b',r:'Adenopatías de mamaria interna (sin axilares)'};
+  if(s.axilar&&s.fixed) return {v:'N2a',r:'Adenopatías axilares fijas / aglomeradas'};
+  if(s.axilar) return {v:'N1',r:'Adenopatías axilares móviles'};
+  return {v:'N0',r:'Sin adenopatías regionales detectables'};
+}
+function computeM(s){
+  if(s.mets==='si') return {v:'M1',r:'Enfermedad a distancia documentada'};
+  if(s.mets==='x') return {v:'Mx',r:'Metástasis no evaluables'};
+  return {v:'M0',r:'Sin evidencia clínica de metástasis'};
+}
+function tGroup(t){ if(t.indexOf('T4')===0)return'T4'; if(t.indexOf('T1')===0)return'T1'; if(t==='T2')return'T2'; if(t==='T3')return'T3'; if(t==='T2')return'T2'; return'T0'; }
+function nGroup(n){ if(n.indexOf('N3')===0)return'N3'; if(n.indexOf('N2')===0)return'N2'; if(n==='N1')return'N1'; return'N0'; }
+function stageGroup(t,n,m){
+  if(m==='M1') return {s:'IV',d:'Enfermedad metastásica. El objetivo terapéutico es el control sistémico y la calidad de vida.'};
+  const T=tGroup(t),N=nGroup(n);
+  if(t==='Tis/T0'&&N==='N0') return {s:'0',d:'Carcinoma in situ. Enfermedad localizada sin invasión.'};
+  if(N==='N3') return {s:'IIIC',d:'Compromiso ganglionar avanzado (N3). Tratamiento multimodal.'};
+  if(T==='T4') return {s:'IIIB',d:'Tumor localmente avanzado (T4). Quimioterapia neoadyuvante a considerar.'};
+  if(N==='N2') return {s:'IIIA',d:'Compromiso ganglionar N2. Abordaje multidisciplinario.'};
+  if(T==='T3'&&N==='N1') return {s:'IIIA',d:'T3 N1. Abordaje multidisciplinario.'};
+  if(T==='T3'&&N==='N0') return {s:'IIB',d:'Tumor > 50 mm sin ganglios. Cirugía y adyuvancia.'};
+  if(T==='T2'&&N==='N1') return {s:'IIB',d:'T2 N1. Cirugía y tratamiento adyuvante.'};
+  if(T==='T2'&&N==='N0') return {s:'IIA',d:'T2 N0. Buen pronóstico con tratamiento adecuado.'};
+  if(T==='T1'&&N==='N1') return {s:'IIA',d:'T1 N1. Buen pronóstico con tratamiento adecuado.'};
+  if(T==='T0'&&N==='N1') return {s:'IIA',d:'T0 N1.'};
+  if(T==='T1'&&N==='N0') return {s:'IA',d:'Enfermedad temprana, altamente curable.'};
+  return {s:'I',d:'Enfermedad temprana.'};
+}
+
+/* ---------- IDENTIDAD (inyectada por el servidor) ---------- */
+const __USER__ = /*__USER__*/null;
+if(__USER__ && __USER__.role && DOCTORS[__USER__.role]){
+  if(__USER__.name) DOCTORS[__USER__.role].name=__USER__.name;
+  if(__USER__.spec) DOCTORS[__USER__.role].spec=__USER__.spec;
+}
+/* ---------- STATE ---------- */
+const S={
+  route:'agenda', doc:(__USER__&&__USER__.role&&DOCTORS[__USER__.role])?__USER__.role:'soto', role:'medico', patient:'sara', tab:'historia',
+  ipadStep:0,
+  // --- Pacientes (API real) ---
+  pacientes:[], cargando:false, pacientesCargados:false, nuevoId:null,
+  modalNuevo:false, modalGuardando:false, modalError:'',
+  npForm:{ nombre:'', sexo:'F', fecha_nacimiento:'', telefono:'', correo:'', seguro:'', dx_resumen:'' },
+  stage:{ size:18, skin:false, chest:false, inflam:false, axilar:true, fixed:false, intmam:false, infracl:false, supracl:false, mets:'no', edition:'8' },
+  bio:{ re:90, rp:80, her2:'neg', ki67:22, grade:'2', subtype:0, sentinel:'si', axdiss:'no' }
+};
+const app=document.getElementById('app');
+function go(r){ S.route=r; render(); window.scrollTo(0,0); }
+function pcolor(i){ return AV_COLORS[i%AV_COLORS.length]; }
+function curPatient(){ return PATIENTS.find(p=>p.id===S.patient) || PATIENTS[0]; }
+function curDoc(){ return DOCTORS[S.doc]; }
+
+/* ============================================================ RENDER ============================================================ */
+function render(){
+  app.innerHTML=shell(viewRouter());
+  bind();
+}
+
+function shell(content){
+  const d=curDoc();
+  const nav=[
+    ['agenda','Agenda',ICN.calendar],
+    ['pacientes','Pacientes',ICN.users],
+    ['seguridad','Seguridad y datos',ICN.shield],
+    ['roadmap','Módulos de cáncer',ICN.layers],
+  ];
+  const active = ['paciente'].includes(S.route)?'pacientes':S.route;
+  return `<div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark">${markSVG()}</div>
+        <div class="wm">Sherlock<small>Top Oncology</small></div>
+      </div>
+      <nav class="nav">
+        <div class="nav-label">Clínica</div>
+        ${nav.map(n=>`<button class="nav-item ${active===n[0]?'active':''}" data-go="${n[0]}">${n[2]}<span>${n[1]}</span></button>`).join('')}
+        <div class="nav-label">Acceso</div>
+        <a class="nav-item" href="/logout" style="text-decoration:none">${ICN.lock}<span>Cerrar sesión</span></a>
+      </nav>
+      <div class="side-foot">
+        <div class="sec-badge">${ICN.lock} Datos cifrados de extremo a extremo</div>
+        <div style="font-size:10.5px;color:#5E8C8C;text-align:center;margin-top:10px;line-height:1.5">Top Oncology · Hospital Ángeles Pedregal<br><span style="color:#446b6b">Plataforma por Simplexity</span></div>
+      </div>
+    </aside>
+    <main class="main">
+      <div class="topbar">
+        <div class="searchbox">${ICN.glass}<input placeholder="Buscar paciente, diagnóstico o estudio…"></div>
+        <div style="flex:1"></div>
+        <div class="role-toggle">
+          <button class="${S.role==='medico'?'on':''}" data-role="medico">Médico</button>
+          <button class="${S.role==='asistente'?'on':''}" data-role="asistente">Asistente · iPad</button>
+        </div>
+        <div class="doc-chip">
+          <div class="av">${d.ini}</div>
+          <div><div class="nm">${d.name}</div><div class="sp">${d.spec}</div></div>
+        </div>
+      </div>
+      <div class="canvas"><div class="maxw fade">${content}</div></div>
+    </main>
+  </div>`;
+}
+
+function viewRouter(){
+  if(S.role==='asistente') return viewAssistant();
+  switch(S.route){
+    case 'agenda': return viewAgenda();
+    case 'pacientes': return viewPatients();
+    case 'paciente': return viewPatient();
+    case 'seguridad': return viewSecurity();
+    case 'roadmap': return viewRoadmap();
+    default: return viewAgenda();
+  }
+}
+
+function markSVG(){
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="#CFEDEC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="6"/><path d="M20 20l-5.5-5.5"/><path d="M10 7v6M7 10h6" stroke="#C2883A"/></svg>`;
+}
+
+/* (La pantalla de login ahora la sirve y protege el servidor: public/login.html) */
+
+/* ---------------- AGENDA ---------------- */
+function viewAgenda(){
+  return `<div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:20px">
+      <div>
+        <div class="h-eyebrow">Hoy · Jueves 19 de junio</div>
+        <div class="h1" style="margin-top:6px">Agenda del día</div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <span class="chip chip-line">${ICN.google}<span style="margin-left:2px">Conectado a Google Calendar</span></span>
+        <button class="btn btn-primary">${ICN.plus} Nueva cita</button>
+      </div>
+    </div>
+    <div class="kpi" style="margin-bottom:22px">
+      <div class="k"><div class="kv">8</div><div class="kl">Citas hoy</div></div>
+      <div class="k"><div class="kv">5</div><div class="kl">En quimioterapia</div></div>
+      <div class="k"><div class="kv">2</div><div class="kl">Valoraciones nuevas</div></div>
+      <div class="k"><div class="kv">3</div><div class="kl">Centros de infusión</div></div>
+    </div>
+    <div class="agenda-grid">
+      <div>
+        <div class="section-title" style="margin-bottom:12px">Citas programadas</div>
+        ${AGENDA.map(a=>`<div class="cal-row">
+          <div class="cal-time">${a.t}</div>
+          <div class="cal-bar" style="background:${a.c}"></div>
+          <div class="cal-main" style="flex:1"><b>${a.n}</b><span>${a.d}</span></div>
+          <span class="chip chip-line">Ver</span>
+        </div>`).join('')}
+      </div>
+      <div>
+        <div class="card pad" style="margin-bottom:16px">
+          <div class="section-title" style="margin-bottom:12px">Auto-agenda del paciente</div>
+          <p class="lead" style="font-size:13px">El paciente reserva con tres datos —nombre, correo y teléfono— y recibe correo de confirmación automático.</p>
+          <div style="margin-top:14px">
+            <div class="field" style="margin-bottom:9px"><input class="input" placeholder="Nombre y apellidos"></div>
+            <div class="field" style="margin-bottom:9px"><input class="input" placeholder="Correo electrónico"></div>
+            <div class="field" style="margin-bottom:12px"><input class="input" placeholder="Teléfono"></div>
+            <button class="btn btn-ghost" style="width:100%;justify-content:center">Enviar enlace de pre-registro</button>
+          </div>
+        </div>
+        <div class="note">${ICN.calendar}<div>Los asistentes pueden agendar en nombre del médico. Cada cita sincroniza con Google Calendar y dispara el correo de confirmación.</div></div>
+      </div>
+    </div>`;
+}
+
+/* ---------------- PATIENTS (API real) ---------------- */
+// Carga la lista de pacientes del médico en sesión desde la API y re-renderiza.
+async function cargarPacientes(){
+  S.cargando=true;
+  try{
+    const r=await fetch('/api/pacientes',{credentials:'same-origin'});
+    if(r.ok){
+      S.pacientes=await r.json();
+      // El paciente recién creado se muestra al inicio de la lista.
+      if(S.nuevoId){
+        const idx=S.pacientes.findIndex(p=>String(p.id)===String(S.nuevoId));
+        if(idx>0){ const [x]=S.pacientes.splice(idx,1); S.pacientes.unshift(x); }
+      }
+    }
+    S.pacientesCargados=true;
+  }catch(e){
+    S.pacientesCargados=true; // evitamos un bucle de recargas si la red falla
+  }
+  S.cargando=false;
+  render();
+}
+
+function esc(v){ return String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function iniciales(nombre){ return String(nombre||'').trim().split(/\s+/).map(x=>x[0]||'').slice(0,2).join('').toUpperCase()||'·'; }
+
+function viewPatients(){
+  // Carga una sola vez al entrar a la vista.
+  if(!S.pacientesCargados && !S.cargando){ cargarPacientes(); }
+
+  const head=`<div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:8px">
+      <div><div class="h-eyebrow">Expedientes</div><div class="h1" style="margin-top:6px">Pacientes</div></div>
+      <button class="btn btn-primary" data-nuevo>${ICN.plus} Nuevo paciente</button>
+    </div>
+    <p class="lead" style="margin-bottom:18px">Cada médico ve únicamente a sus pacientes. <span class="chip chip-line" style="margin-left:4px">Filtrado por: ${esc(curDoc().name)}</span></p>`;
+
+  let body;
+  if(S.cargando && !S.pacientes.length){
+    body=`<div class="card pad" style="text-align:center;color:var(--slate);padding:34px">Cargando pacientes…</div>`;
+  } else if(!S.pacientes.length){
+    body=`<div class="card pad" style="text-align:center;padding:40px 24px">
+        <div class="section-title" style="margin-bottom:8px">Sin pacientes</div>
+        <p class="lead" style="margin-bottom:18px">Aún no hay pacientes. Crea el primero.</p>
+        <button class="btn btn-primary" data-nuevo style="margin:0 auto">${ICN.plus} Nuevo paciente</button>
+      </div>`;
+  } else {
+    body=S.pacientes.map((p,i)=>{
+      const nueva=String(p.id)===String(S.nuevoId);
+      const sexo=p.sexo==='F'?'Femenino':(p.sexo==='M'?'Masculino':'—');
+      const edad=(p.edad!=null)?` · ${p.edad} años`:'';
+      const estatus=p.estatus?esc(p.estatus):'Sin estatus';
+      return `<button class="patient-row" data-go="paciente" data-pat="${esc(p.id)}">
+        <div class="p-av" style="background:${pcolor(i)}">${esc(iniciales(p.nombre))}</div>
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:14px">${esc(p.nombre)} <span style="color:var(--muted);font-weight:400">· ${sexo}${edad}</span></div>
+          <div style="font-size:12.5px;color:var(--slate);margin-top:2px">${p.dx_resumen?esc(p.dx_resumen):'Sin diagnóstico registrado'}</div>
+        </div>
+        <span class="chip ${nueva?'chip-brass':'chip-ok'}">${estatus}</span>
+        <span style="color:var(--muted)">${ICN.glass}</span>
+      </button>`;
+    }).join('');
+  }
+  return head+body+(S.modalNuevo?modalNuevoPaciente():'');
+}
+
+// Modal sencillo para dar de alta un paciente (mismo lenguaje visual).
+function modalNuevoPaciente(){
+  const f=S.npForm;
+  return `<div class="np-overlay" data-modal-cancel style="position:fixed;inset:0;background:rgba(13,40,42,.45);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50">
+    <div class="card" style="width:100%;max-width:520px;max-height:90vh;overflow:auto" onclick="event.stopPropagation()">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between">
+        <div class="section-title">Nuevo paciente</div>
+        <button class="btn btn-ghost" data-modal-cancel style="padding:6px 10px">Cerrar</button>
+      </div>
+      <div style="padding:20px 22px">
+        ${S.modalError?`<div class="note" style="background:#FCE9E9;border-color:#F0C4C4;color:#A23A3A;margin-bottom:16px">${esc(S.modalError)}</div>`:''}
+        <div class="field"><label>Nombre <span class="hint">· requerido</span></label><input class="input" data-np="nombre" value="${esc(f.nombre)}" placeholder="Nombre y apellidos"></div>
+        <div style="display:flex;gap:12px">
+          <div class="field" style="flex:1"><label>Sexo</label>
+            <select class="select" data-np="sexo">
+              <option value="F" ${f.sexo==='F'?'selected':''}>Femenino</option>
+              <option value="M" ${f.sexo==='M'?'selected':''}>Masculino</option>
+            </select>
+          </div>
+          <div class="field" style="flex:1"><label>Fecha de nacimiento</label><input class="input" type="date" data-np="fecha_nacimiento" value="${esc(f.fecha_nacimiento)}"></div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div class="field" style="flex:1"><label>Teléfono</label><input class="input" data-np="telefono" value="${esc(f.telefono)}" placeholder="55 0000 0000"></div>
+          <div class="field" style="flex:1"><label>Correo</label><input class="input" type="email" data-np="correo" value="${esc(f.correo)}" placeholder="correo@dominio.com"></div>
+        </div>
+        <div class="field"><label>Seguro</label><input class="input" data-np="seguro" value="${esc(f.seguro)}" placeholder="Aseguradora / póliza"></div>
+        <div class="field" style="margin-bottom:4px"><label>Diagnóstico resumido</label><input class="input" data-np="dx_resumen" value="${esc(f.dx_resumen)}" placeholder="Ej. Carcinoma ductal infiltrante de mama"></div>
+      </div>
+      <div style="padding:16px 22px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px">
+        <button class="btn btn-ghost" data-modal-cancel>Cancelar</button>
+        <button class="btn btn-primary" data-modal-save ${S.modalGuardando?'disabled':''}>${S.modalGuardando?'Guardando…':'Guardar'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function abrirModalNuevo(){
+  S.npForm={ nombre:'', sexo:'F', fecha_nacimiento:'', telefono:'', correo:'', seguro:'', dx_resumen:'' };
+  S.modalError=''; S.modalGuardando=false; S.modalNuevo=true; render();
+}
+function cerrarModalNuevo(){ S.modalNuevo=false; S.modalGuardando=false; S.modalError=''; render(); }
+
+async function guardarPaciente(){
+  const f=S.npForm;
+  if(!f.nombre.trim()){ S.modalError='El nombre del paciente es obligatorio.'; render(); return; }
+  S.modalError=''; S.modalGuardando=true; render();
+  const body={
+    nombre:f.nombre.trim(),
+    sexo:f.sexo||null,
+    fecha_nacimiento:f.fecha_nacimiento||null,
+    telefono:f.telefono.trim()||null,
+    correo:f.correo.trim()||null,
+    seguro:f.seguro.trim()||null,
+    dx_resumen:f.dx_resumen.trim()||null
+  };
+  try{
+    const r=await fetch('/api/pacientes',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body:JSON.stringify(body)
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){
+      S.modalGuardando=false;
+      S.modalError=data.error||'No se pudo crear el paciente.';
+      render();
+      return;
+    }
+    // Éxito: cerramos el modal y recargamos la lista mostrando al nuevo al inicio.
+    S.nuevoId=data.id;
+    S.modalNuevo=false; S.modalGuardando=false; S.modalError='';
+    await cargarPacientes();
+  }catch(e){
+    S.modalGuardando=false;
+    S.modalError='No se pudo conectar con el servidor. Intenta de nuevo.';
+    render();
+  }
+}
+
+/* ---------------- PATIENT FILE ---------------- */
+function viewPatient(){
+  const p=curPatient(); const i=PATIENTS.indexOf(p);
+  const tabs=[
+    ['historia','Historia clínica',ICN.doc],
+    ['exploracion','Exploración',ICN.pulse],
+    ['estudios','Estudios',ICN.microscope],
+    ['diagnostico','Diagnóstico · Mama',ICN.target],
+    ['informe','Informe médico',ICN.print],
+  ];
+  return `<button class="btn btn-ghost" data-go="pacientes" style="margin-bottom:16px">${ICN.back} Pacientes</button>
+    <div class="phead">
+      <div class="p-av" style="background:${pcolor(i)}">${p.n.split(' ').map(x=>x[0]).slice(0,2).join('')}</div>
+      <div style="flex:1">
+        <div class="h2">${p.n}</div>
+        <div style="font-size:12.5px;color:var(--slate)">${p.sx==='F'?'Femenino':'Masculino'} · ${p.age} años · ${p.dx}</div>
+      </div>
+      <span class="chip ${p.featured?'chip-brass':'chip-ok'}">${p.tag}</span>
+    </div>
+    <div class="tabs">
+      ${tabs.map(t=>`<button class="tab ${S.tab===t[0]?'on':''}" data-tab="${t[0]}">${t[2]}${t[1]}</button>`).join('')}
+    </div>
+    <div class="fade">${tabRouter(p)}</div>`;
+}
+function tabRouter(p){
+  switch(S.tab){
+    case 'historia': return tabHistoria(p);
+    case 'exploracion': return tabExploracion(p);
+    case 'estudios': return tabEstudios(p);
+    case 'diagnostico': return tabDiagnostico(p);
+    case 'informe': return tabInforme(p);
+    default: return tabHistoria(p);
+  }
+}
+
+/* ---- Historia clínica ---- */
+function acc(flag,title,sub,body){
+  const col=flag==='pos'?'var(--warn)':flag==='neg'?'var(--ok)':'var(--muted)';
+  return `<div class="acc"><div class="acc-head"><span class="flag" style="background:${col}"></span>
+    <span class="tt">${title}</span><span class="st">${sub}</span></div>${body?`<div class="acc-body">${body}</div>`:''}</div>`;
+}
+function tabHistoria(p){
+  const gineco = p.sx==='F'
+    ? acc('pos','Antecedentes gineco-obstétricos','Menarca 12 · G2P2 · menopausia 51', `<p class="lead" style="font-size:13px;padding-top:12px">Enfermedad de glándula mamaria: mastopatía fibroquística. Última mastografía 18 Jul 2025 — <b>BIRADS 5</b>. Ultrasonido axilar con adenopatía sospechosa. Sin implantes mamarios.</p>`)
+    : acc('neg','Antecedentes andrológicos / próstata','APE en seguimiento','');
+  return `<div class="grid2" style="grid-template-columns:1.3fr .9fr;gap:22px">
+    <div>
+      <div class="card pad" style="margin-bottom:16px">
+        <div class="section-title" style="margin-bottom:12px">Motivo de consulta</div>
+        <p style="font-size:14px;line-height:1.6">Tumoración palpable en cuadrante superior externo de mama izquierda, detectada hace 6 semanas. Refiere crecimiento progresivo, sin dolor. <span style="color:var(--muted)">Refiere: autoexploración.</span></p>
+      </div>
+      <div class="section-title" style="margin:6px 0 10px">Antecedentes (se despliegan solo los positivos)</div>
+      ${acc('pos','Heredo-familiares de cáncer','Madre: mama (58 a) · Tía materna: ovario', `<div class="grid3" style="padding-top:12px"><div class="field"><label>Madre</label><div class="chip chip-warn">Cáncer de mama · 58 a</div></div><div class="field"><label>Tía materna</label><div class="chip chip-warn">Cáncer de ovario · 62 a</div></div><div class="field"><label>Hermanos / hijos</label><div class="chip chip-ok">Sin antecedente</div></div></div>`)}
+      ${acc('neg','Personales no patológicos','No tabaquismo · alcoholismo ocasional','')}
+      ${acc('pos','Personales patológicos','HAS (48 a) · Dislipidemia', `<p class="lead" style="font-size:13px;padding-top:12px">Hipertensión arterial sistémica diagnosticada a los 48 años, en tratamiento. Dislipidemia. Niega diabetes, cardiopatía, EPOC o asma.</p>`)}
+      ${gineco}
+      ${acc('pos','Cirugías previas','Colecistectomía (2012)', `<p class="lead" style="font-size:13px;padding-top:12px">Colecistectomía laparoscópica en 2012, sin complicaciones. Cada cirugía registra fecha y detalles.</p>`)}
+      ${acc('neg','Infecciosos · transfusiones','Sin antecedentes','')}
+    </div>
+    <div>
+      <div class="card pad" style="margin-bottom:14px;border-color:var(--danger-soft);background:linear-gradient(180deg,#fff,#fffafa)">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px"><span class="flag" style="background:var(--danger)"></span><b style="color:var(--danger);font-size:13px">Alergias</b></div>
+        <p style="font-size:13.5px">Penicilina — reacción <b>severa</b> (anafilaxia). Sin alergias alimentarias conocidas.</p>
+      </div>
+      <div class="card pad">
+        <div class="section-title" style="margin-bottom:10px">Resumen estructurado</div>
+        <div style="font-size:12.5px;color:var(--slate);line-height:1.9">
+          <div style="display:flex;justify-content:space-between"><span>Riesgo heredo-familiar</span><span class="chip chip-warn">Alto</span></div>
+          <div style="display:flex;justify-content:space-between"><span>Comorbilidades</span><span class="chip chip-line">2</span></div>
+          <div style="display:flex;justify-content:space-between"><span>BRCA</span><span class="chip chip-info">Solicitado</span></div>
+        </div>
+      </div>
+      <div class="note" style="margin-top:14px">${ICN.info}<div>Lo sencillo (antecedentes familiares) lo captura el asistente en iPad. Lo clínico complejo queda al médico.</div></div>
+    </div>
+  </div>`;
+}
+
+/* ---- Exploración / signos vitales ---- */
+function tabExploracion(p){
+  const w=72, h=162; // kg, cm
+  const bsaMost=Math.sqrt((h*w)/3600);
+  const bsaDu=0.007184*Math.pow(h,0.725)*Math.pow(w,0.425);
+  const bmi=w/Math.pow(h/100,2);
+  const v=(l,val,unit,range)=>`<div class="vital"><div class="vl">${l}</div><div><input class="input" value="${val}" style="text-align:center;padding:7px"></div><div class="vr">${unit} · <span style="color:var(--ok)">${range}</span></div></div>`;
+  return `<div class="grid2" style="grid-template-columns:1.25fr .75fr;gap:22px">
+    <div class="card pad">
+      <div class="section-title" style="margin-bottom:6px">Signos vitales</div>
+      <p class="lead" style="font-size:12.5px;margin-bottom:10px">Con validación de rango. Se actualizan en cada consulta.</p>
+      ${v('Temperatura','36.6','°C','35–41')}
+      ${v('SatO₂','97','%','30–100')}
+      ${v('Frecuencia cardíaca','78','lpm','20–250')}
+      ${v('T/A sistólica','128','mmHg','50–300')}
+      ${v('T/A diastólica','82','mmHg','10–180')}
+      ${v('Peso','72.0','kg','20–200')}
+      ${v('Estatura','162','cm','20–200')}
+      <button class="btn btn-primary" style="margin-top:14px">${ICN.check} Confirmar y registrar</button>
+    </div>
+    <div>
+      <div class="calc-card" style="margin-bottom:12px">
+        <div class="cl">Superficie corporal (BSA)</div>
+        <div class="cv">${bsaMost.toFixed(2)} <span style="font-size:15px;color:#8FBDBC">m²</span></div>
+        <div class="cf">Mosteller · √(talla×peso/3600)</div>
+        <div class="cf">Du Bois: ${bsaDu.toFixed(2)} m²</div>
+      </div>
+      <div class="calc-card" style="background:linear-gradient(160deg,#9A6A24,#7c5419);margin-bottom:12px">
+        <div class="cl" style="color:#F0DDBE">Índice de masa corporal</div>
+        <div class="cv">${bmi.toFixed(1)}</div>
+        <div class="cf" style="color:#F0DDBE">peso / talla² · normal</div>
+      </div>
+      <div class="note">${ICN.target}<div><b>Dosificación.</b> La BSA alimenta el cálculo de dosis de quimioterapia; para carboplatino se integrará la fórmula de Calvert (AUC × [TFG + 25]).</div></div>
+    </div>
+  </div>`;
+}
+
+/* ---- Estudios ---- */
+function tabEstudios(p){
+  const tbl=(title,icon,rows)=>`<div class="card" style="overflow:hidden">
+    <div style="display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--line)">
+      <span style="color:var(--petrol)">${icon}</span><b style="font-size:13.5px">${title}</b>
+      <div style="flex:1"></div><button class="btn btn-ghost" style="padding:6px 11px;font-size:12px">${ICN.plus} Agregar</button>
+    </div>
+    <table class="tablecard"><thead><tr><th>Fecha</th><th>Estudio</th><th style="text-align:right">PDF</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr><td class="mono" style="color:var(--slate)">${r.f}</td><td>${r.e}</td><td style="text-align:right"><span class="chip chip-info">${ICN.pdf} Ver</span></td></tr>`).join('')}</tbody></table>
+  </div>`;
+  return `<div class="grid2" style="gap:16px">
+    ${tbl('Laboratorio',ICN.pulse,STUDIES.lab)}
+    ${tbl('Patología',ICN.microscope,STUDIES.pat)}
+    ${tbl('Imagen',ICN.glass,STUDIES.img)}
+    ${tbl('Moleculares / genéticos',ICN.dna,STUDIES.mol)}
+  </div>
+  <div class="note" style="margin-top:16px">${ICN.shield}<div>Los PDF y las imágenes (incluidas fotografías clínicas del paciente) se almacenan cifradas, con acceso restringido al médico tratante y registro de cada apertura.</div></div>`;
+}
+
+/* ---- Diagnóstico: motor de estadificación mama ---- */
+function tabDiagnostico(p){
+  const s=S.stage, b=S.bio;
+  const T=computeT(s),N=computeN(s),M=computeM(s);
+  const grp=stageGroup(T.v,N.v,M.v);
+  const steps=[
+    `Tamaño tumoral y extensión local → <b>${T.v}</b>`,
+    T.r,
+    `Compromiso ganglionar regional → <b>${N.v}</b>`,
+    N.r,
+    `Enfermedad a distancia → <b>${M.v}</b>`,
+  ];
+  const chk=(k,l)=>`<label style="display:flex;align-items:center;gap:9px;padding:7px 0;font-size:13px;cursor:pointer">
+    <input type="checkbox" data-stage="${k}" ${s[k]?'checked':''} style="width:17px;height:17px;accent-color:var(--petrol)">${l}</label>`;
+  const her2opts=['neg','low','pos'].map(o=>`<button class="${b.her2===o?'on':''}" data-bio-her2="${o}">${o==='neg'?'0/1+':o==='low'?'2+ (low)':'3+'}</button>`).join('');
+  return `<div class="grid2" style="grid-template-columns:1fr 1.02fr;gap:24px;align-items:start">
+    <div>
+      <div class="card pad" style="margin-bottom:16px">
+        <div class="section-title" style="margin-bottom:14px">Tumor primario (T)</div>
+        <div class="field"><label>Tamaño clínico del tumor <span class="hint">en mm</span></label>
+          <input class="input" type="number" value="${s.size}" data-stage-num="size"></div>
+        <div style="border-top:1px solid var(--paper-2);padding-top:6px">
+          ${chk('skin','Infiltra piel (ulceración, edema, piel de naranja)')}
+          ${chk('chest','Infiltra pared torácica')}
+          ${chk('inflam','Carcinoma inflamatorio')}
+        </div>
+      </div>
+      <div class="card pad" style="margin-bottom:16px">
+        <div class="section-title" style="margin-bottom:10px">Ganglios regionales (N)</div>
+        ${chk('axilar','Adenopatías axilares ipsilaterales')}
+        <label style="display:flex;align-items:center;gap:9px;padding:7px 0 7px 26px;font-size:12.5px;color:var(--slate);cursor:pointer">
+          <input type="checkbox" data-stage="fixed" ${s.fixed?'checked':''} style="width:16px;height:16px;accent-color:var(--petrol)">…fijas / aglomeradas (si no, se asumen móviles)</label>
+        ${chk('intmam','Adenopatías de mamaria interna')}
+        ${chk('infracl','Adenopatías infraclaviculares')}
+        ${chk('supracl','Adenopatías supraclaviculares')}
+      </div>
+      <div class="card pad">
+        <div class="section-title" style="margin-bottom:10px">Metástasis (M)</div>
+        <div class="seg" data-seg="mets">
+          <button class="${s.mets==='no'?'on':''}" data-stage-mets="no">M0 · No</button>
+          <button class="${s.mets==='si'?'on':''}" data-stage-mets="si">M1 · Sí</button>
+          <button class="${s.mets==='x'?'on':''}" data-stage-mets="x">Mx</button>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="stage-engine">
+        <div class="se-head"><div class="ic">${ICN.spark}</div>
+          <div><div class="tt">Deducción de etapa</div><div class="sb">Sherlock razona sobre tus hallazgos</div></div>
+        </div>
+        <div class="se-body">
+          ${steps.map((t,i)=>`<div class="deduce" style="animation-delay:${i*0.07}s"><div class="dn">${i%2===0?(i/2+1):'·'}</div><div class="dt">${t}</div></div>`).join('')}
+          <div class="tnm-out">
+            <div class="tnm-box"><div class="k">T</div><div class="v">${T.v}</div></div>
+            <div class="tnm-box"><div class="k">N</div><div class="v">${N.v}</div></div>
+            <div class="tnm-box"><div class="k">M</div><div class="v">${M.v}</div></div>
+          </div>
+          <div class="stage-final">
+            <div><div class="sl">Etapa clínica</div><div class="sv">${grp.s}</div></div>
+            <div class="sd">${grp.d}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;margin-top:14px">
+            <span style="font-size:11.5px;color:#8FBDBC">Criterio:</span>
+            <select class="select" data-stage-ed style="width:auto;background-color:rgba(255,255,255,.07);border-color:rgba(255,255,255,.15);color:#fff;font-size:12px;padding:6px 28px 6px 10px">
+              <option value="8" ${s.edition==='8'?'selected':''}>AJCC 8ª ed. · anatómica</option>
+              <option value="7" ${s.edition==='7'?'selected':''}>AJCC 7ª ed.</option>
+            </select>
+            <span style="font-size:11px;color:#7FB4B3">editable tras revisión</span>
+          </div>
+        </div>
+      </div>
+      <div class="card pad" style="margin-top:16px">
+        <div class="section-title" style="margin-bottom:12px">Perfil molecular y patología</div>
+        <div class="field"><label>Subtipo histológico</label>
+          <select class="select" data-bio="subtype">${SUBTIPOS.map((x,i)=>`<option ${b.subtype===i?'selected':''}>${x}</option>`).join('')}</select></div>
+        <div class="field"><label>Grado histológico</label>
+          <div class="seg">${['1','2','3'].map(g=>`<button class="${b.grade===g?'on':''}" data-bio-grade="${g}">G${g}</button>`).join('')}</div></div>
+        <div class="bio-row"><div class="bl">Receptor de estrógenos (RE)</div><div><input class="input" value="${b.re}" style="text-align:center;padding:7px"> </div></div>
+        <div class="bio-row"><div class="bl">Receptor de progesterona (RP)</div><div><input class="input" value="${b.rp}" style="text-align:center;padding:7px"></div></div>
+        <div class="bio-row" style="grid-template-columns:1fr;gap:7px"><div class="bl">HER2 (IHQ)</div><div class="seg">${her2opts}</div></div>
+        <div class="bio-row"><div class="bl">Ki-67</div><div><input class="input" value="${b.ki67}" style="text-align:center;padding:7px"></div></div>
+        <div class="divider"></div>
+        <div class="bio-row"><div class="bl">Ganglio centinela realizado</div><div><span class="chip ${b.sentinel==='si'?'chip-ok':'chip-line'}">${b.sentinel==='si'?'Sí':'No'}</span></div></div>
+        <div style="margin-top:14px;padding:13px;border-radius:11px;background:var(--paper-2);border:1px solid var(--line)">
+          <div style="font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)">Clasificación molecular sugerida</div>
+          <div style="font-family:var(--serif);font-size:18px;color:var(--petrol);font-weight:600;margin-top:3px">${molSubtype(b)}</div>
+        </div>
+      </div>
+      <div class="note" style="margin-top:14px">${ICN.info}<div>Herramienta de apoyo. La etapa y la clasificación son una propuesta a partir de los datos capturados; <b>la decisión clínica final siempre es del médico tratante.</b></div></div>
+    </div>
+  </div>`;
+}
+function molSubtype(b){
+  const her2pos=b.her2==='pos';
+  const hr=(parseFloat(b.re)>=1||parseFloat(b.rp)>=1);
+  if(her2pos&&hr) return 'Luminal B / HER2-positivo';
+  if(her2pos) return 'HER2-positivo (no luminal)';
+  if(hr&&parseFloat(b.ki67)<20&&b.grade!=='3') return 'Luminal A';
+  if(hr) return 'Luminal B (HER2-negativo)';
+  return 'Triple negativo';
+}
+
+/* ---- Informe ---- */
+function tabInforme(p){
+  const s=S.stage,b=S.bio;
+  const T=computeT(s),N=computeN(s),M=computeM(s);const grp=stageGroup(T.v,N.v,M.v);
+  const d=curDoc();
+  return `<div style="display:flex;gap:10px;margin-bottom:16px">
+      <button class="btn btn-brass">${ICN.print} Imprimir / PDF</button>
+      <button class="btn btn-ghost">${ICN.doc} Versión para aseguradora</button>
+      <button class="btn btn-ghost">Generar receta</button>
+    </div>
+    <div class="report">
+      <div class="rep-head">
+        <div>
+          <div style="display:flex;align-items:center;gap:10px"><div class="mark" style="width:34px;height:34px;border-radius:9px;background:var(--petrol);display:grid;place-items:center">${markSVG()}</div>
+          <div><div style="font-family:var(--serif);font-weight:600;font-size:18px;color:var(--petrol)">Top Oncology</div><div style="font-size:11px;color:var(--muted)">Hospital Ángeles Pedregal · CDMX</div></div></div>
+        </div>
+        <div style="text-align:right;font-size:12px;color:var(--slate)">
+          <div style="font-weight:600;color:var(--ink)">${d.name}</div>
+          <div>${d.spec}</div>
+          <div class="mono" style="margin-top:3px">Céd. prof. ${d.cedula} · Esp. ${d.ced_esp}</div>
+        </div>
+      </div>
+      <div class="rep-body">
+        <div style="display:flex;justify-content:space-between;margin-bottom:18px">
+          <div><div style="font-family:var(--serif);font-size:20px;font-weight:600">${p.n}</div><div style="font-size:12.5px;color:var(--slate)">${p.sx==='F'?'Femenino':'Masculino'} · ${p.age} años</div></div>
+          <div style="text-align:right;font-size:12px;color:var(--slate)"><div>Folio: <span class="mono">SHK-2025-0418</span></div><div>Fecha: 19/06/2026</div></div>
+        </div>
+        <div class="rep-sec"><h4>Diagnóstico</h4><p>${p.dx}, ${molSubtype(b)}, grado histológico ${b.grade}. Estadificación clínica <b>${T.v} ${N.v} ${M.v}</b> — <b>Etapa ${grp.s}</b> (AJCC ${s.edition}ª ed.).</p></div>
+        <div class="rep-sec"><h4>Perfil molecular</h4><p>RE ${b.re}% · RP ${b.rp}% · HER2 ${b.her2==='pos'?'positivo (3+)':b.her2==='low'?'2+ (HER2-low)':'negativo'} · Ki-67 ${b.ki67}%.</p></div>
+        <div class="rep-sec"><h4>Resumen clínico</h4><p>Paciente con tumoración mamaria de ${s.size} mm. ${N.r}. ${M.r}. Antecedente heredo-familiar de cáncer de mama y ovario. Estudio molecular BRCA1/2 en proceso.</p></div>
+        <div class="rep-sec"><h4>Plan de tratamiento</h4><p>Se propone abordaje multidisciplinario: valoración para quimioterapia neoadyuvante con la Dra. Escobar, cirugía oncoplástica conservadora vs. mastectomía según respuesta, y radioterapia adyuvante. Pendiente resultado de BRCA para consejería genética.</p></div>
+      </div>
+      <div class="rep-foot">
+        <div>Documento generado por Sherlock · válido con firma del médico tratante.</div>
+        <div class="sig">${d.name}<br><span style="font-size:11px;color:var(--muted)">${d.spec}</span></div>
+      </div>
+    </div>`;
+}
+
+/* ---------------- SECURITY ---------------- */
+function viewSecurity(){
+  const tile=(t,txt)=>`<div class="sec-tile"><div class="ic">${ICN.check}</div><div><h4>${t}</h4><p>${txt}</p></div></div>`;
+  return `<div class="h-eyebrow">Confianza</div><div class="h1" style="margin-top:6px;margin-bottom:6px">Seguridad y protección de datos</div>
+    <p class="lead" style="max-width:680px;margin-bottom:22px">Sherlock maneja datos personales sensibles —diagnósticos, estudios y fotografías clínicas—. El modelo de datos se diseña desde el inicio pensando en la normatividad mexicana, listo para endurecerse antes de comercializar.</p>
+    <div class="sec-grid">
+      ${tile('Cifrado en reposo y en tránsito','Toda la información, incluidas imágenes y fotografías de pacientes, se almacena cifrada. Las comunicaciones usan TLS.')}
+      ${tile('Aislamiento por médico (multi-tenant)','Cada oncólogo accede solo a sus pacientes. La separación está pensada para vender la plataforma a varios médicos sin que se crucen datos.')}
+      ${tile('Roles y mínimo privilegio','Médico y asistente tienen permisos distintos. El asistente captura datos básicos; los datos clínicos sensibles quedan reservados al médico.')}
+      ${tile('Bitácora de acceso (auditoría)','Cada apertura de expediente, estudio o fotografía queda registrada: quién, cuándo y desde dónde.')}
+      ${tile('Defensa ante intrusiones','Autenticación reforzada, sesiones con expiración y respaldo cifrado para resistir intentos de acceso no autorizado.')}
+      ${tile('Manejo de imágenes clínicas','Las fotografías del paciente se tratan como dato sensible: acceso restringido, marca de agua y consentimiento ligado al expediente.')}
+    </div>
+    <div class="card pad" style="margin-top:20px">
+      <div class="section-title" style="margin-bottom:12px">Cumplimiento normativo (objetivo de diseño)</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px">
+        <span class="chip chip-info">NOM-004-SSA3-2012 · Expediente clínico</span>
+        <span class="chip chip-info">NOM-024-SSA3-2012 · Intercambio de información en salud</span>
+        <span class="chip chip-info">LFPDPPP · Datos personales · Derechos ARCO</span>
+        <span class="chip chip-info">Aviso de privacidad y consentimiento informado</span>
+      </div>
+      <div class="note" style="margin-top:14px">${ICN.info}<div>Este demo ilustra la arquitectura de seguridad; no es aún un sistema en producción. La conformidad final debe validarse con asesoría legal y un proceso de certificación antes de operar con pacientes reales.</div></div>
+    </div>`;
+}
+
+/* ---------------- ROADMAP ---------------- */
+function viewRoadmap(){
+  const mod=(name,st,desc,on)=>`<div class="card pad" style="${on?'border-color:var(--petrol);box-shadow:var(--sh-2)':''}">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <b style="font-size:15px">${name}</b><span class="chip ${on?'chip-ok':'chip-line'}">${st}</span></div>
+    <p class="lead" style="font-size:13px">${desc}</p></div>`;
+  return `<div class="h-eyebrow">Extensible por diseño</div><div class="h1" style="margin-top:6px;margin-bottom:6px">Módulos de cáncer</div>
+    <p class="lead" style="max-width:700px;margin-bottom:22px">El motor de estadificación, los catálogos de subtipos histológicos y los biomarcadores están parametrizados. <b>Construimos el siguiente cáncer que el equipo defina</b> a partir de las listas que ustedes nos pasen.</p>
+    <div class="grid2" style="gap:16px">
+      ${mod('Mama','Activo','Tumor primario, ganglios, metástasis, biomarcadores RE/RP/HER2/Ki-67 y estadificación AJCC.',true)}
+      ${mod('Próstata','Listo para configurar','Gleason/ISUP, APE, TNM urológico y estratificación de riesgo. Esperando listas del equipo.',false)}
+      ${mod('Colon y recto','Listo para configurar','TNM colorrectal, MSI/MMR, RAS/BRAF y respuesta a terapia.',false)}
+      ${mod('Pulmón','Listo para configurar','TNM torácico, EGFR/ALK/PD-L1 y subtipos histológicos.',false)}
+    </div>
+    <div class="note" style="margin-top:18px">${ICN.layers}<div>Cada módulo nuevo reutiliza la misma historia clínica, exploración, estudios e informe. Solo cambian las reglas de estadificación y los catálogos — que ustedes definen y nosotros codificamos.</div></div>`;
+}
+
+/* ---------------- ASSISTANT (iPad) ---------------- */
+function viewAssistant(){
+  const fams=[['Madre','Padre','Hermano/a','Abuelos','Hijos']];
+  return `<div style="text-align:center;margin-bottom:8px"><div class="h-eyebrow">Modo asistente</div><div class="h1" style="margin-top:6px">Captura en iPad</div>
+    <p class="lead" style="max-width:520px;margin:8px auto 0">El asistente toma los datos sencillos —antecedentes familiares— junto al paciente. Lo clínico complejo se deja al médico.</p></div>
+    <div class="ipad">
+      <div class="ipad-head"><div style="font-size:12px;color:#8FBDBC;letter-spacing:1px;text-transform:uppercase">Pre-registro · Sara Méndez</div>
+        <div style="font-family:var(--serif);font-size:19px;margin-top:3px">Antecedentes familiares de cáncer</div></div>
+      <div class="ipad-body">
+        <div class="fam-card">
+          <b style="font-size:14px">¿Algún familiar ha tenido cáncer?</b>
+          <div class="toggle-big" style="margin-top:12px"><button class="on">Sí</button><button>No</button></div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);letter-spacing:.5px;text-transform:uppercase;margin:16px 0 8px">¿Quién? (toca para agregar)</div>
+        <div style="display:flex;flex-wrap:wrap;gap:9px;margin-bottom:18px">
+          ${fams[0].map((f,i)=>`<span class="chip ${i<2?'chip-brass':'chip-line'}" style="padding:10px 16px;font-size:13.5px">${f}</span>`).join('')}
+        </div>
+        <div class="fam-card">
+          <div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13.5px">Madre</b><span class="chip chip-warn">Mama</span></div>
+          <div style="margin-top:10px;display:flex;gap:10px"><input class="input" placeholder="Tipo de cáncer" value="Cáncer de mama"><input class="input" placeholder="Edad" value="58" style="width:90px;text-align:center"></div>
+        </div>
+        <div class="fam-card">
+          <div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:13.5px">Tía materna</b><span class="chip chip-warn">Ovario</span></div>
+          <div style="margin-top:10px;display:flex;gap:10px"><input class="input" placeholder="Tipo de cáncer" value="Cáncer de ovario"><input class="input" placeholder="Edad" value="62" style="width:90px;text-align:center"></div>
+        </div>
+        <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:8px;padding:14px" data-role="medico">${ICN.check} Guardar y entregar al médico</button>
+      </div>
+    </div>`;
+}
+
+/* ============================================================ BIND ============================================================ */
+function bind(){
+  document.querySelectorAll('[data-go]').forEach(el=>el.onclick=()=>{
+    const pat=el.getAttribute('data-pat'); if(pat){S.patient=pat;S.tab='historia';}
+    const g=el.getAttribute('data-go');
+    go(g);
+  });
+  // Pacientes: abrir modal de alta, cancelar, guardar, y campos del formulario
+  document.querySelectorAll('[data-nuevo]').forEach(el=>el.onclick=()=>abrirModalNuevo());
+  document.querySelectorAll('[data-modal-cancel]').forEach(el=>el.onclick=()=>cerrarModalNuevo());
+  document.querySelectorAll('[data-modal-save]').forEach(el=>el.onclick=()=>guardarPaciente());
+  document.querySelectorAll('[data-np]').forEach(el=>el.oninput=el.onchange=()=>{S.npForm[el.getAttribute('data-np')]=el.value;});
+
+  document.querySelectorAll('[data-role]').forEach(el=>el.onclick=()=>{S.role=el.getAttribute('data-role');render();});
+  document.querySelectorAll('[data-tab]').forEach(el=>el.onclick=()=>{S.tab=el.getAttribute('data-tab');render();});
+
+  // staging interactions
+  document.querySelectorAll('[data-stage]').forEach(el=>el.onchange=()=>{S.stage[el.getAttribute('data-stage')]=el.checked;render();});
+  document.querySelectorAll('[data-stage-num]').forEach(el=>el.oninput=()=>{S.stage[el.getAttribute('data-stage-num')]=el.value;render();});
+  document.querySelectorAll('[data-stage-mets]').forEach(el=>el.onclick=()=>{S.stage.mets=el.getAttribute('data-stage-mets');render();});
+  document.querySelectorAll('[data-stage-ed]').forEach(el=>el.onchange=()=>{S.stage.edition=el.value;render();});
+  document.querySelectorAll('[data-bio-grade]').forEach(el=>el.onclick=()=>{S.bio.grade=el.getAttribute('data-bio-grade');render();});
+  document.querySelectorAll('[data-bio-her2]').forEach(el=>el.onclick=()=>{S.bio.her2=el.getAttribute('data-bio-her2');render();});
+  document.querySelectorAll('[data-bio]').forEach(el=>el.onchange=()=>{const k=el.getAttribute('data-bio');S.bio[k]=el.selectedIndex!==undefined&&k==='subtype'?el.selectedIndex:el.value;render();});
+}
+
+render();
+</script>
+</body>
+</html>
