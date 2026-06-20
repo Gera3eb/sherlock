@@ -365,6 +365,8 @@ if(__USER__ && __USER__.role && DOCTORS[__USER__.role]){
 const S={
   route:'agenda', doc:(__USER__&&__USER__.role&&DOCTORS[__USER__.role])?__USER__.role:'soto', role:'medico', patient:'sara', tab:'historia',
   ipadStep:0,
+  // --- Agenda / citas (API real) ---
+  citas:[], citasCargadas:false, citasFecha:hoyISO(),
   // --- Pacientes (API real) ---
   pacientes:[], cargando:false, pacientesCargados:false, nuevoId:null,
   modalNuevo:false, modalGuardando:false, modalError:'',
@@ -451,32 +453,81 @@ function markSVG(){
 /* (La pantalla de login ahora la sirve y protege el servidor: public/login.html) */
 
 /* ---------------- AGENDA ---------------- */
+// Carga las citas reales del médico para una fecha (YYYY-MM-DD) y re-renderiza.
+async function cargarCitas(fecha){
+  S.citasFecha=fecha; S.citasCargadas=true; // bandera arriba: evita recargar en cada render
+  try{
+    const r=await fetch(`/api/citas?fecha=${encodeURIComponent(fecha)}`,{credentials:'same-origin'});
+    S.citas = r.ok ? await r.json() : [];
+  }catch(e){ S.citas=[]; }
+  render();
+}
+// Hora HH:MM tomada del ISO tal cual se guardó (sin desfase de zona horaria).
+function horaCita(inicio){ const s=String(inicio||''); return s.length>=16 ? s.slice(11,16) : '—'; }
+// Color de la barra según el tipo de cita (mismo lenguaje visual del demo).
+function colorCita(tipo){
+  const t=String(tipo||'').toLowerCase();
+  if(/quim|qt/.test(t)) return '#9A6A24';
+  if(/infus|zometa|neupogen|zoledr/.test(t)) return '#2D6E8E';
+  return '#0E5E63'; // consulta / valoración / por defecto
+}
+// Fecha en español para el encabezado (mediodía para evitar saltos de día por zona).
+function fechaLargaES(iso){
+  try{
+    const d=new Date(String(iso)+'T12:00:00');
+    const s=d.toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'});
+    return s.charAt(0).toUpperCase()+s.slice(1);
+  }catch(e){ return iso; }
+}
 function viewAgenda(){
+  // Carga una sola vez por fecha al entrar a la vista.
+  if(!S.citasCargadas){ cargarCitas(S.citasFecha); }
+  const citas=S.citas||[];
+  const tlc=c=>String(c.tipo||'').toLowerCase();
+  const nQT=citas.filter(c=>/quim|qt/.test(tlc(c))).length;
+  const nVal=citas.filter(c=>/valor|consulta/.test(tlc(c))).length;
+  const nInf=citas.filter(c=>/infus|zometa|neupogen|zoledr/.test(tlc(c))).length;
+  const filaCita=(c)=>{
+    const hora=horaCita(c.inicio), color=colorCita(c.tipo);
+    const titulo=esc(c.titulo||'(sin título)'), tipo=esc(c.tipo||'');
+    const tienePac=c.paciente_id!=null;
+    const nombre=tienePac&&c.paciente_nombre?esc(c.paciente_nombre):null;
+    const bold=nombre||titulo;
+    const sub=nombre?`${titulo}${tipo?` · ${tipo}`:''}`:(tipo||'—');
+    const inner=`<div class="cal-time">${esc(hora)}</div>
+      <div class="cal-bar" style="background:${color}"></div>
+      <div class="cal-main" style="flex:1"><b>${bold}</b><span>${sub}</span></div>
+      ${tienePac?`<span class="chip chip-line">Ver expediente</span>`:`<span class="chip chip-line" style="opacity:.6">Sin paciente</span>`}`;
+    // Si la cita tiene paciente, toda la fila navega a su expediente (mismo
+    // mecanismo que la lista de Pacientes: data-go="paciente" + data-pat).
+    return tienePac
+      ? `<button class="cal-row" data-go="paciente" data-pat="${esc(c.paciente_id)}" style="width:100%;text-align:left;font:inherit;cursor:pointer">${inner}</button>`
+      : `<div class="cal-row">${inner}</div>`;
+  };
+  const lista = citas.length
+    ? citas.map(filaCita).join('')
+    : `<div class="card pad"><p class="lead" style="margin:0">Sin citas para este día.</p></div>`;
   return `<div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:20px">
       <div>
-        <div class="h-eyebrow">Hoy · Jueves 19 de junio</div>
+        <div class="h-eyebrow">${esc(fechaLargaES(S.citasFecha))}</div>
         <div class="h1" style="margin-top:6px">Agenda del día</div>
       </div>
       <div style="display:flex;gap:10px;align-items:center">
+        <input class="input" type="date" data-citas-fecha value="${esc(S.citasFecha)}" style="width:auto;padding:8px 12px">
         <span class="chip chip-line">${ICN.google}<span style="margin-left:2px">Conectado a Google Calendar</span></span>
         <button class="btn btn-primary">${ICN.plus} Nueva cita</button>
       </div>
     </div>
     <div class="kpi" style="margin-bottom:22px">
-      <div class="k"><div class="kv">8</div><div class="kl">Citas hoy</div></div>
-      <div class="k"><div class="kv">5</div><div class="kl">En quimioterapia</div></div>
-      <div class="k"><div class="kv">2</div><div class="kl">Valoraciones nuevas</div></div>
-      <div class="k"><div class="kv">3</div><div class="kl">Centros de infusión</div></div>
+      <div class="k"><div class="kv">${citas.length}</div><div class="kl">Citas del día</div></div>
+      <div class="k"><div class="kv">${nQT}</div><div class="kl">En quimioterapia</div></div>
+      <div class="k"><div class="kv">${nVal}</div><div class="kl">Valoraciones / consultas</div></div>
+      <div class="k"><div class="kv">${nInf}</div><div class="kl">Centros de infusión</div></div>
     </div>
     <div class="agenda-grid">
       <div>
         <div class="section-title" style="margin-bottom:12px">Citas programadas</div>
-        ${AGENDA.map(a=>`<div class="cal-row">
-          <div class="cal-time">${a.t}</div>
-          <div class="cal-bar" style="background:${a.c}"></div>
-          <div class="cal-main" style="flex:1"><b>${a.n}</b><span>${a.d}</span></div>
-          <span class="chip chip-line">Ver</span>
-        </div>`).join('')}
+        ${lista}
       </div>
       <div>
         <div class="card pad" style="margin-bottom:16px">
@@ -1435,6 +1486,9 @@ function bind(){
 
   document.querySelectorAll('[data-role]').forEach(el=>el.onclick=()=>{S.role=el.getAttribute('data-role');render();});
   document.querySelectorAll('[data-tab]').forEach(el=>el.onclick=()=>{S.tab=el.getAttribute('data-tab');render();});
+
+  // Agenda: cambiar el día recarga las citas de esa fecha.
+  document.querySelectorAll('[data-citas-fecha]').forEach(el=>el.onchange=()=>{ if(el.value) cargarCitas(el.value); });
 
   // staging interactions
   document.querySelectorAll('[data-stage]').forEach(el=>el.onchange=()=>{S.stage[el.getAttribute('data-stage')]=el.checked;render();});
