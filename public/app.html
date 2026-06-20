@@ -64,6 +64,10 @@ a{color:var(--petrol);text-decoration:none}
 .doc-chip .av{width:32px;height:32px;border-radius:50%;background:var(--petrol);color:#fff;display:grid;place-items:center;font-weight:600;font-size:12.5px}
 .doc-chip .nm{font-size:12.5px;font-weight:600;line-height:1.15}
 .doc-chip .sp{font-size:10.5px;color:var(--muted)}
+.btn-logout{display:flex;align-items:center;gap:7px;padding:8px 13px;border-radius:10px;border:1px solid var(--line);background:#fff;color:var(--slate);font-size:12.5px;font-weight:600;text-decoration:none;white-space:nowrap;transition:.13s}
+.btn-logout:hover{color:var(--danger);border-color:var(--danger-soft)}
+.btn-logout svg{width:16px;height:16px;flex:none}
+.mobnav{display:none}
 .canvas{padding:26px 30px 60px;flex:1;overflow:auto}
 .maxw{max-width:1120px;margin:0 auto}
 
@@ -230,6 +234,16 @@ a{color:var(--petrol);text-decoration:none}
   .app-shell{grid-template-columns:1fr}.sidebar{display:none}
   .login-wrap{grid-template-columns:1fr}.login-art{display:none}
   .agenda-grid,.sec-grid{grid-template-columns:1fr}.grid2,.grid3{grid-template-columns:1fr}
+  /* Sin sidebar: el topbar se compacta y aparece la navegación inferior fija. */
+  .searchbox{display:none}
+  .doc-chip .nm,.doc-chip .sp{display:none}
+  .btn-logout span{display:none}.btn-logout{padding:8px}
+  .canvas{padding-bottom:86px} /* deja sitio para que el bottom nav no tape contenido */
+  .mobnav{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:40;background:rgba(255,255,255,.97);backdrop-filter:blur(8px);border-top:1px solid var(--line);padding:6px 6px;justify-content:space-around}
+  .mobnav button{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10px;font-weight:600;color:var(--slate);padding:5px 6px;border-radius:9px;flex:1}
+  .mobnav button.active{color:var(--petrol)}
+  .mobnav button.active svg{color:var(--petrol)}
+  .mobnav svg{width:19px;height:19px}
 }
 /* Impresión del informe médico: oculta toda la interfaz y deja solo el documento. */
 @media print{
@@ -428,8 +442,12 @@ function shell(content){
           <div class="av">${d.ini}</div>
           <div><div class="nm">${d.name}</div><div class="sp">${d.spec}</div></div>
         </div>
+        <a class="btn-logout" href="/logout" title="Cerrar sesión">${ICN.lock}<span>Cerrar sesión</span></a>
       </div>
       <div class="canvas"><div class="maxw fade">${content}</div></div>
+      <nav class="mobnav">
+        ${nav.map(n=>`<button class="${active===n[0]?'active':''}" data-go="${n[0]}">${n[2]}<span>${n[1].split(' ')[0]}</span></button>`).join('')}
+      </nav>
     </main>
   </div>`;
 }
