@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS sherlock.diagnosticos (
   t                 text,
   n                 text,
   m                 text,
+  tamano_mm         numeric,
   etapa             text,
   biomarcadores     jsonb DEFAULT '{}'::jsonb,
   plan              text,

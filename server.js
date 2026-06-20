@@ -244,6 +244,13 @@ app.post('/api/pacientes/:id/diagnostico', requireAuth, ensureMedicoId, async (r
   const b = req.body || {};
   const biomarcadores = (b.biomarcadores != null && typeof b.biomarcadores === 'object' && !Array.isArray(b.biomarcadores))
     ? b.biomarcadores : {};
+  // Tamaño tumoral real en mm (numérico, nullable). Los diagnósticos viejos y
+  // los casos sin medida quedan en NULL; el front conserva ahí su fallback.
+  let tamano_mm = null;
+  if (b.tamano_mm != null && b.tamano_mm !== '') {
+    const n = Number(b.tamano_mm);
+    if (Number.isFinite(n)) tamano_mm = n;
+  }
   try {
     const paciente = await getPacientePropio(id, req.session.user.medico_id);
     if (!paciente) {
@@ -251,12 +258,12 @@ app.post('/api/pacientes/:id/diagnostico', requireAuth, ensureMedicoId, async (r
     }
     const { rows } = await pool.query(
       `INSERT INTO sherlock.diagnosticos
-         (paciente_id, fecha, tipo_histologico, subtipo, grado, t, n, m, etapa, biomarcadores, plan, edicion_ajcc)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
+         (paciente_id, fecha, tipo_histologico, subtipo, grado, t, n, m, tamano_mm, etapa, biomarcadores, plan, edicion_ajcc)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
        RETURNING *`,
       [
         id, b.fecha || null, b.tipo_histologico || null, b.subtipo || null, b.grado || null,
-        b.t || null, b.n || null, b.m || null, b.etapa || null,
+        b.t || null, b.n || null, b.m || null, tamano_mm, b.etapa || null,
         JSON.stringify(biomarcadores), b.plan || null, b.edicion_ajcc || null,
       ]
     );

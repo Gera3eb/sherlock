@@ -358,6 +358,9 @@ const S={
   // --- Pacientes (API real) ---
   pacientes:[], cargando:false, pacientesCargados:false, nuevoId:null,
   modalNuevo:false, modalGuardando:false, modalError:'',
+  // --- Expediente (API real) ---
+  expediente:null, expCargando:false, expGuardando:false, expMsg:'', expFor:null,
+  antForm:null, antGuardando:false, antMsg:'',
   npForm:{ nombre:'', sexo:'F', fecha_nacimiento:'', telefono:'', correo:'', seguro:'', dx_resumen:'' },
   stage:{ size:18, skin:false, chest:false, inflam:false, axilar:true, fixed:false, intmam:false, infracl:false, supracl:false, mets:'no', edition:'8' },
   bio:{ re:90, rp:80, her2:'neg', ki67:22, grade:'2', subtype:0, sentinel:'si', axdiss:'no' }
@@ -505,6 +508,170 @@ async function cargarPacientes(){
 function esc(v){ return String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function iniciales(nombre){ return String(nombre||'').trim().split(/\s+/).map(x=>x[0]||'').slice(0,2).join('').toUpperCase()||'·'; }
 
+/* ---------------- EXPEDIENTE (API real) ---------------- */
+// Un id real de paciente es numérico (lo da la BD); los del demo son texto ('sara', ...).
+function esNumId(id){ return /^\d+$/.test(String(id)); }
+function idxPaciente(id){ const i=S.pacientes.findIndex(p=>String(p.id)===String(id)); return i<0?0:i; }
+function edadDesde(fnac){
+  if(!fnac) return null;
+  const n=new Date(fnac); if(isNaN(n)) return null;
+  const h=new Date(); let a=h.getFullYear()-n.getFullYear();
+  const m=h.getMonth()-n.getMonth(); if(m<0||(m===0&&h.getDate()<n.getDate())) a--;
+  return a>=0?a:null;
+}
+function hoyISO(){ return new Date().toISOString().slice(0,10); }
+
+// Carga el expediente consolidado del paciente desde la API.
+// prefill=true (al abrir): siembra el motor con el último diagnóstico guardado.
+// prefill=false (tras guardar): solo refresca los datos, sin pisar lo que el médico edita.
+async function cargarExpediente(id, prefill=true){
+  S.expCargando=true; S.expFor=String(id); S.expMsg='';
+  try{
+    const r=await fetch(`/api/pacientes/${id}/expediente`,{credentials:'same-origin'});
+    if(!r.ok){
+      S.expCargando=false; S.expediente=null;
+      S.expMsg = r.status===404 ? 'Expediente no disponible.' : 'No se pudo cargar el expediente.';
+      render(); return;
+    }
+    const data=await r.json();
+    S.expediente=data; S.expCargando=false;
+    if(prefill){
+      prefillAntecedentes(data && data.antecedentes);
+      if(data && data.diagnostico){ prefillDesdeDiagnostico(data.diagnostico); }
+    }
+    render();
+  }catch(e){
+    S.expCargando=false; S.expediente=null;
+    S.expMsg='No se pudo conectar con el servidor.';
+    render();
+  }
+}
+
+// Siembra S.stage / S.bio con el último diagnóstico guardado, para que el motor
+// reproduzca y muestre lo último capturado. NO toca computeT/N/M ni stageGroup:
+// solo reconstruye las ENTRADAS categóricas que esos cálculos consumen.
+function prefillDesdeDiagnostico(dx){
+  const b=S.bio, s=S.stage, bm=dx.biomarcadores||{};
+  if(bm.re!=null)   b.re=bm.re;
+  if(bm.rp!=null)   b.rp=bm.rp;
+  if(bm.her2!=null) b.her2=bm.her2;
+  if(bm.ki67!=null) b.ki67=bm.ki67;
+  if(dx.grado)      b.grade=String(dx.grado);
+  if(dx.tipo_histologico){ const ix=SUBTIPOS.indexOf(dx.tipo_histologico); if(ix>=0) b.subtype=ix; }
+  // T: reconstruye las entradas categóricas (piel/pared/inflamatorio) para que
+  // computeT devuelva el mismo T.
+  s.skin=false; s.chest=false; s.inflam=false;
+  const sz={T1mi:1,T1a:3,T1b:8,T1c:15,T2:35,T3:60};
+  if(dx.t==='T4d') s.inflam=true;
+  else if(dx.t==='T4c'){ s.skin=true; s.chest=true; }
+  else if(dx.t==='T4a') s.chest=true;
+  else if(dx.t==='T4b') s.skin=true;
+  else if(dx.t==='Tis/T0') s.size=0;
+  else if(sz[dx.t]!=null) s.size=sz[dx.t];
+  // Tamaño en mm: si el diagnóstico persistió el valor real (columna tamano_mm),
+  // usa ESE valor exacto. Si viene null (diagnósticos previos a la migración 003),
+  // conserva el representativo de arriba. Postgres devuelve NUMERIC como string.
+  if(dx.tamano_mm!=null && dx.tamano_mm!==''){ const mm=parseFloat(dx.tamano_mm); if(Number.isFinite(mm)) s.size=mm; }
+  // N: reconstruye los flags para que computeN devuelva el mismo N.
+  s.axilar=false; s.fixed=false; s.intmam=false; s.infracl=false; s.supracl=false;
+  if(dx.n==='N1'){ s.axilar=true; }
+  else if(dx.n==='N2a'){ s.axilar=true; s.fixed=true; }
+  else if(dx.n==='N2b'){ s.intmam=true; }
+  else if(dx.n==='N3a'){ s.infracl=true; }
+  else if(dx.n==='N3b'){ s.intmam=true; s.axilar=true; }
+  else if(dx.n==='N3c'){ s.supracl=true; }
+  // M y edición.
+  s.mets = dx.m==='M1' ? 'si' : dx.m==='Mx' ? 'x' : 'no';
+  if(dx.edicion_ajcc) s.edition=String(dx.edicion_ajcc);
+}
+
+// Persiste el diagnóstico como nueva versión: toma lo que el motor YA tiene en
+// pantalla (no recalcula nada distinto) y hace POST a la API.
+async function guardarDiagnostico(){
+  if(!esNumId(S.patient)) return; // pacientes demo no persisten
+  const s=S.stage, b=S.bio;
+  const t=computeT(s).v, n=computeN(s).v, m=computeM(s).v;
+  const etapa=stageGroup(t,n,m).s;
+  // Tamaño tumoral real capturado por el médico (mm). Misma semántica que computeT:
+  // parseFloat; si no es un número válido se envía null (no se inventa).
+  const mm=parseFloat(s.size);
+  const body={
+    fecha:hoyISO(),
+    tipo_histologico:SUBTIPOS[b.subtype]||null,
+    subtipo:molSubtype(b),
+    grado:String(b.grade),
+    t, n, m, etapa,
+    tamano_mm: Number.isFinite(mm)?mm:null,
+    biomarcadores:{ re:b.re, rp:b.rp, her2:b.her2, ki67:b.ki67 },
+    plan:null,
+    edicion_ajcc:String(s.edition)
+  };
+  S.expGuardando=true; S.expMsg=''; render();
+  try{
+    const r=await fetch(`/api/pacientes/${S.patient}/diagnostico`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body:JSON.stringify(body)
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){
+      S.expGuardando=false;
+      S.expMsg=data.error||'No se pudo guardar el diagnóstico.';
+      render(); return;
+    }
+    // Éxito: recarga el expediente (sin re-sembrar el motor) y confirma.
+    await cargarExpediente(S.patient, false);
+    S.expGuardando=false; S.expMsg='Diagnóstico guardado ✓'; render();
+  }catch(e){
+    S.expGuardando=false;
+    S.expMsg='No se pudo conectar con el servidor.';
+    render();
+  }
+}
+
+// Siembra S.antForm con los antecedentes guardados (objeto jsonb libre) para
+// editarlos en la pestaña de Historia. Si no hay registro previo, deja vacíos.
+function prefillAntecedentes(ant){
+  const d=(ant && ant.datos) || {};
+  S.antForm={
+    heredofamiliares: d.heredofamiliares || '',
+    patologicos:      d.patologicos      || '',
+    quirurgicos:      d.quirurgicos      || '',
+    alergias:         d.alergias         || '',
+    gineco_obstetricos: d.gineco_obstetricos || '',
+    no_patologicos:   d.no_patologicos   || '',
+  };
+}
+
+// Persiste los antecedentes del paciente real vía PUT (UPSERT jsonb).
+async function guardarAntecedentes(){
+  if(!esNumId(S.patient)) return; // pacientes demo no persisten
+  const datos=S.antForm || {};
+  S.antGuardando=true; S.antMsg=''; render();
+  try{
+    const r=await fetch(`/api/pacientes/${S.patient}/antecedentes`,{
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body:JSON.stringify({ datos })
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){
+      S.antGuardando=false;
+      S.antMsg=data.error||'No se pudieron guardar los antecedentes.';
+      render(); return;
+    }
+    // Éxito: recarga el expediente (sin re-sembrar el form, ya está al día) y confirma.
+    await cargarExpediente(S.patient, false);
+    S.antGuardando=false; S.antMsg='Antecedentes guardados ✓'; render();
+  }catch(e){
+    S.antGuardando=false;
+    S.antMsg='No se pudo conectar con el servidor.';
+    render();
+  }
+}
+
 function viewPatients(){
   // Carga una sola vez al entrar a la vista.
   if(!S.pacientesCargados && !S.cargando){ cargarPacientes(); }
@@ -627,6 +794,30 @@ async function guardarPaciente(){
 /* ---------------- PATIENT FILE ---------------- */
 function viewPatient(){
   const p=curPatient(); const i=PATIENTS.indexOf(p);
+  const num=esNumId(S.patient);
+  // Paciente real (id numérico): carga el expediente desde la API una sola vez.
+  if(num && S.expFor!==String(S.patient) && !S.expCargando){ cargarExpediente(S.patient); }
+
+  // Encabezado: usa los datos reales del expediente cuando ya cargó; si es un
+  // paciente demo (id de texto) conserva el comportamiento actual.
+  const real = (num && S.expediente && S.expediente.paciente && String(S.expediente.paciente.id)===String(S.patient)) ? S.expediente.paciente : null;
+  let hNombre,hSexo,hEdad,hDx,hTag,hInit,hColor,hBrass;
+  if(real){
+    hNombre=esc(real.nombre);
+    hSexo=real.sexo==='F'?'Femenino':real.sexo==='M'?'Masculino':'—';
+    hEdad=edadDesde(real.fecha_nacimiento);
+    hDx=esc(real.dx_resumen||'Sin diagnóstico registrado');
+    hTag=esc(real.estatus||'Activo');
+    hInit=esc(iniciales(real.nombre));
+    hColor=pcolor(idxPaciente(S.patient)); hBrass=false;
+  } else if(num){ // numérico pero el expediente aún no llega
+    hNombre='Cargando expediente…'; hSexo='—'; hEdad=null; hDx='—'; hTag='…'; hInit='·';
+    hColor=pcolor(i); hBrass=false;
+  } else { // paciente demo
+    hNombre=p.n; hSexo=p.sx==='F'?'Femenino':'Masculino'; hEdad=p.age; hDx=p.dx; hTag=p.tag;
+    hInit=p.n.split(' ').map(x=>x[0]).slice(0,2).join(''); hColor=pcolor(i); hBrass=p.featured;
+  }
+
   const tabs=[
     ['historia','Historia clínica',ICN.doc],
     ['exploracion','Exploración',ICN.pulse],
@@ -636,12 +827,12 @@ function viewPatient(){
   ];
   return `<button class="btn btn-ghost" data-go="pacientes" style="margin-bottom:16px">${ICN.back} Pacientes</button>
     <div class="phead">
-      <div class="p-av" style="background:${pcolor(i)}">${p.n.split(' ').map(x=>x[0]).slice(0,2).join('')}</div>
+      <div class="p-av" style="background:${hColor}">${hInit}</div>
       <div style="flex:1">
-        <div class="h2">${p.n}</div>
-        <div style="font-size:12.5px;color:var(--slate)">${p.sx==='F'?'Femenino':'Masculino'} · ${p.age} años · ${p.dx}</div>
+        <div class="h2">${hNombre}</div>
+        <div style="font-size:12.5px;color:var(--slate)">${hSexo}${(hEdad!=null)?` · ${hEdad} años`:''} · ${hDx}</div>
       </div>
-      <span class="chip ${p.featured?'chip-brass':'chip-ok'}">${p.tag}</span>
+      <span class="chip ${hBrass?'chip-brass':'chip-ok'}">${hTag}</span>
     </div>
     <div class="tabs">
       ${tabs.map(t=>`<button class="tab ${S.tab===t[0]?'on':''}" data-tab="${t[0]}">${t[2]}${t[1]}</button>`).join('')}
@@ -665,7 +856,50 @@ function acc(flag,title,sub,body){
   return `<div class="acc"><div class="acc-head"><span class="flag" style="background:${col}"></span>
     <span class="tt">${title}</span><span class="st">${sub}</span></div>${body?`<div class="acc-body">${body}</div>`:''}</div>`;
 }
+// Antecedentes editables para paciente real (id numérico): captura libre jsonb,
+// prefill desde S.antForm, edición quirúrgica (oninput sin render) y PUT.
+function tabHistoriaReal(real){
+  const f=S.antForm || {};
+  const esF = real.sexo==='F';
+  const ta=(k,label,ph)=>`<div class="field"><label>${label}</label>
+    <textarea class="input" data-ant="${k}" rows="3" style="min-height:80px;resize:vertical" placeholder="${ph}">${esc(f[k]||'')}</textarea></div>`;
+  return `<div class="grid2" style="grid-template-columns:1.3fr .9fr;gap:22px">
+    <div>
+      <div class="card pad" style="margin-bottom:16px">
+        <div class="section-title" style="margin-bottom:12px">Antecedentes</div>
+        ${ta('heredofamiliares','Heredo-familiares de cáncer','Familiares con cáncer: parentesco, tipo y edad…')}
+        ${ta('patologicos','Personales patológicos','Enfermedades previas o crónicas, en tratamiento…')}
+        ${ta('quirurgicos','Quirúrgicos','Cirugías previas con fecha y detalles…')}
+        ${ta('no_patologicos','Personales no patológicos','Tabaquismo, alcohol, ejercicio, ocupación…')}
+        ${esF?ta('gineco_obstetricos','Gineco-obstétricos','Menarca, G/P/A/C, menopausia, mastografías…'):''}
+      </div>
+    </div>
+    <div>
+      <div class="card pad" style="margin-bottom:14px;border-color:var(--danger-soft);background:linear-gradient(180deg,#fff,#fffafa)">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px"><span class="flag" style="background:var(--danger)"></span><b style="color:var(--danger);font-size:13px">Alergias</b></div>
+        <textarea class="input" data-ant="alergias" rows="3" style="min-height:80px;resize:vertical" placeholder="Medicamentos o alimentos, reacción y severidad…">${esc(f.alergias||'')}</textarea>
+      </div>
+      <div class="note">${ICN.info}<div>Captura libre. Se guarda en el expediente del paciente y se relee al reabrir.</div></div>
+    </div>
+  </div>
+  ${barraGuardarAnt()}`;
+}
+// Barra de acción para persistir antecedentes (solo en pacientes reales).
+function barraGuardarAnt(){
+  if(!esNumId(S.patient)) return '';
+  const ok=/✓/.test(S.antMsg);
+  return `<div style="display:flex;align-items:center;justify-content:flex-end;gap:14px;margin-top:18px">
+    ${S.antMsg?`<span style="font-size:13px;color:${ok?'var(--ok)':'#A23A3A'}">${esc(S.antMsg)}</span>`:''}
+    <button class="btn btn-primary" data-guardar-ant ${S.antGuardando?'disabled':''}>${S.antGuardando?'Guardando…':'Guardar antecedentes'}</button>
+  </div>`;
+}
 function tabHistoria(p){
+  // Paciente real (id numérico): formulario editable conectado a la API.
+  const num=esNumId(S.patient);
+  const real=(num && S.expediente && S.expediente.paciente && String(S.expediente.paciente.id)===String(S.patient)) ? S.expediente.paciente : null;
+  if(real) return tabHistoriaReal(real);
+  if(num) return `<div class="card pad"><p class="lead" style="margin:0">Cargando expediente…</p></div>`;
+  // Paciente demo: contenido ilustrativo original (sin API).
   const gineco = p.sx==='F'
     ? acc('pos','Antecedentes gineco-obstétricos','Menarca 12 · G2P2 · menopausia 51', `<p class="lead" style="font-size:13px;padding-top:12px">Enfermedad de glándula mamaria: mastopatía fibroquística. Última mastografía 18 Jul 2025 — <b>BIRADS 5</b>. Ultrasonido axilar con adenopatía sospechosa. Sin implantes mamarios.</p>`)
     : acc('neg','Antecedentes andrológicos / próstata','APE en seguimiento','');
@@ -758,17 +992,25 @@ function tabEstudios(p){
 }
 
 /* ---- Diagnóstico: motor de estadificación mama ---- */
-function tabDiagnostico(p){
-  const s=S.stage, b=S.bio;
-  const T=computeT(s),N=computeN(s),M=computeM(s);
-  const grp=stageGroup(T.v,N.v,M.v);
-  const steps=[
+// Texto de los pasos de deducción y su HTML. Compartidos por tabDiagnostico
+// (render completo) y actualizarMotor (refresco quirúrgico al teclear).
+function pasosDeduccion(T,N,M){
+  return [
     `Tamaño tumoral y extensión local → <b>${T.v}</b>`,
     T.r,
     `Compromiso ganglionar regional → <b>${N.v}</b>`,
     N.r,
     `Enfermedad a distancia → <b>${M.v}</b>`,
   ];
+}
+function pasosHTML(steps){
+  return steps.map((t,i)=>`<div class="deduce" style="animation-delay:${i*0.07}s"><div class="dn">${i%2===0?(i/2+1):'·'}</div><div class="dt">${t}</div></div>`).join('');
+}
+function tabDiagnostico(p){
+  const s=S.stage, b=S.bio;
+  const T=computeT(s),N=computeN(s),M=computeM(s);
+  const grp=stageGroup(T.v,N.v,M.v);
+  const steps=pasosDeduccion(T,N,M);
   const chk=(k,l)=>`<label style="display:flex;align-items:center;gap:9px;padding:7px 0;font-size:13px;cursor:pointer">
     <input type="checkbox" data-stage="${k}" ${s[k]?'checked':''} style="width:17px;height:17px;accent-color:var(--petrol)">${l}</label>`;
   const her2opts=['neg','low','pos'].map(o=>`<button class="${b.her2===o?'on':''}" data-bio-her2="${o}">${o==='neg'?'0/1+':o==='low'?'2+ (low)':'3+'}</button>`).join('');
@@ -808,15 +1050,15 @@ function tabDiagnostico(p){
           <div><div class="tt">Deducción de etapa</div><div class="sb">Sherlock razona sobre tus hallazgos</div></div>
         </div>
         <div class="se-body">
-          ${steps.map((t,i)=>`<div class="deduce" style="animation-delay:${i*0.07}s"><div class="dn">${i%2===0?(i/2+1):'·'}</div><div class="dt">${t}</div></div>`).join('')}
+          <div id="se-steps" style="display:contents">${pasosHTML(steps)}</div>
           <div class="tnm-out">
-            <div class="tnm-box"><div class="k">T</div><div class="v">${T.v}</div></div>
-            <div class="tnm-box"><div class="k">N</div><div class="v">${N.v}</div></div>
-            <div class="tnm-box"><div class="k">M</div><div class="v">${M.v}</div></div>
+            <div class="tnm-box"><div class="k">T</div><div class="v" id="tnm-T">${T.v}</div></div>
+            <div class="tnm-box"><div class="k">N</div><div class="v" id="tnm-N">${N.v}</div></div>
+            <div class="tnm-box"><div class="k">M</div><div class="v" id="tnm-M">${M.v}</div></div>
           </div>
           <div class="stage-final">
-            <div><div class="sl">Etapa clínica</div><div class="sv">${grp.s}</div></div>
-            <div class="sd">${grp.d}</div>
+            <div><div class="sl">Etapa clínica</div><div class="sv" id="stage-sv">${grp.s}</div></div>
+            <div class="sd" id="stage-sd">${grp.d}</div>
           </div>
           <div style="display:flex;align-items:center;gap:10px;margin-top:14px">
             <span style="font-size:11.5px;color:#8FBDBC">Criterio:</span>
@@ -834,19 +1076,29 @@ function tabDiagnostico(p){
           <select class="select" data-bio="subtype">${SUBTIPOS.map((x,i)=>`<option ${b.subtype===i?'selected':''}>${x}</option>`).join('')}</select></div>
         <div class="field"><label>Grado histológico</label>
           <div class="seg">${['1','2','3'].map(g=>`<button class="${b.grade===g?'on':''}" data-bio-grade="${g}">G${g}</button>`).join('')}</div></div>
-        <div class="bio-row"><div class="bl">Receptor de estrógenos (RE)</div><div><input class="input" value="${b.re}" style="text-align:center;padding:7px"> </div></div>
-        <div class="bio-row"><div class="bl">Receptor de progesterona (RP)</div><div><input class="input" value="${b.rp}" style="text-align:center;padding:7px"></div></div>
+        <div class="bio-row"><div class="bl">Receptor de estrógenos (RE)</div><div><input class="input" type="number" value="${b.re}" data-bio-num="re" style="text-align:center;padding:7px"> </div></div>
+        <div class="bio-row"><div class="bl">Receptor de progesterona (RP)</div><div><input class="input" type="number" value="${b.rp}" data-bio-num="rp" style="text-align:center;padding:7px"></div></div>
         <div class="bio-row" style="grid-template-columns:1fr;gap:7px"><div class="bl">HER2 (IHQ)</div><div class="seg">${her2opts}</div></div>
-        <div class="bio-row"><div class="bl">Ki-67</div><div><input class="input" value="${b.ki67}" style="text-align:center;padding:7px"></div></div>
+        <div class="bio-row"><div class="bl">Ki-67</div><div><input class="input" type="number" value="${b.ki67}" data-bio-num="ki67" style="text-align:center;padding:7px"></div></div>
         <div class="divider"></div>
         <div class="bio-row"><div class="bl">Ganglio centinela realizado</div><div><span class="chip ${b.sentinel==='si'?'chip-ok':'chip-line'}">${b.sentinel==='si'?'Sí':'No'}</span></div></div>
         <div style="margin-top:14px;padding:13px;border-radius:11px;background:var(--paper-2);border:1px solid var(--line)">
           <div style="font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)">Clasificación molecular sugerida</div>
-          <div style="font-family:var(--serif);font-size:18px;color:var(--petrol);font-weight:600;margin-top:3px">${molSubtype(b)}</div>
+          <div id="mol-sugerida" style="font-family:var(--serif);font-size:18px;color:var(--petrol);font-weight:600;margin-top:3px">${molSubtype(b)}</div>
         </div>
       </div>
       <div class="note" style="margin-top:14px">${ICN.info}<div>Herramienta de apoyo. La etapa y la clasificación son una propuesta a partir de los datos capturados; <b>la decisión clínica final siempre es del médico tratante.</b></div></div>
     </div>
+  </div>
+  ${barraGuardarDx()}`;
+}
+// Barra de acción para persistir el diagnóstico (solo en pacientes reales).
+function barraGuardarDx(){
+  if(!esNumId(S.patient)) return '';
+  const ok=/✓/.test(S.expMsg);
+  return `<div style="display:flex;align-items:center;justify-content:flex-end;gap:14px;margin-top:18px">
+    ${S.expMsg?`<span style="font-size:13px;color:${ok?'var(--ok)':'#A23A3A'}">${esc(S.expMsg)}</span>`:''}
+    <button class="btn btn-primary" data-guardar-dx ${S.expGuardando?'disabled':''}>${S.expGuardando?'Guardando…':'Guardar diagnóstico'}</button>
   </div>`;
 }
 function molSubtype(b){
@@ -857,6 +1109,26 @@ function molSubtype(b){
   if(hr&&parseFloat(b.ki67)<20&&b.grade!=='3') return 'Luminal A';
   if(hr) return 'Luminal B (HER2-negativo)';
   return 'Triple negativo';
+}
+
+// Refresco quirúrgico del motor T/N/M/etapa: recalcula desde S.stage y parchea
+// SOLO los nodos del panel de resultado, sin re-renderizar la vista (así el input
+// activo conserva foco y posición del cursor mientras se teclea).
+function actualizarMotor(){
+  const s=S.stage;
+  const T=computeT(s),N=computeN(s),M=computeM(s);
+  const grp=stageGroup(T.v,N.v,M.v);
+  const stepsEl=document.getElementById('se-steps');
+  if(stepsEl) stepsEl.innerHTML=pasosHTML(pasosDeduccion(T,N,M));
+  const set=(id,v)=>{const el=document.getElementById(id); if(el) el.textContent=v;};
+  set('tnm-T',T.v); set('tnm-N',N.v); set('tnm-M',M.v);
+  set('stage-sv',grp.s); set('stage-sd',grp.d);
+}
+// Refresco quirúrgico de la clasificación molecular sugerida (depende de
+// RE/RP/HER2/Ki-67/grado), sin re-render para no perder el foco al teclear.
+function actualizarMolecular(){
+  const el=document.getElementById('mol-sugerida');
+  if(el) el.textContent=molSubtype(S.bio);
 }
 
 /* ---- Informe ---- */
@@ -988,12 +1260,23 @@ function bind(){
 
   // staging interactions
   document.querySelectorAll('[data-stage]').forEach(el=>el.onchange=()=>{S.stage[el.getAttribute('data-stage')]=el.checked;render();});
-  document.querySelectorAll('[data-stage-num]').forEach(el=>el.oninput=()=>{S.stage[el.getAttribute('data-stage-num')]=el.value;render();});
+  // Tamaño tumoral: actualiza S y refresca el motor SIN render() (conserva foco).
+  document.querySelectorAll('[data-stage-num]').forEach(el=>el.oninput=()=>{S.stage[el.getAttribute('data-stage-num')]=el.value;actualizarMotor();});
   document.querySelectorAll('[data-stage-mets]').forEach(el=>el.onclick=()=>{S.stage.mets=el.getAttribute('data-stage-mets');render();});
   document.querySelectorAll('[data-stage-ed]').forEach(el=>el.onchange=()=>{S.stage.edition=el.value;render();});
   document.querySelectorAll('[data-bio-grade]').forEach(el=>el.onclick=()=>{S.bio.grade=el.getAttribute('data-bio-grade');render();});
   document.querySelectorAll('[data-bio-her2]').forEach(el=>el.onclick=()=>{S.bio.her2=el.getAttribute('data-bio-her2');render();});
   document.querySelectorAll('[data-bio]').forEach(el=>el.onchange=()=>{const k=el.getAttribute('data-bio');S.bio[k]=el.selectedIndex!==undefined&&k==='subtype'?el.selectedIndex:el.value;render();});
+  // Biomarcadores numéricos (RE/RP/Ki-67): actualiza S y refresca el subtipo
+  // molecular SIN render() (conserva foco; antes no estaban enganchados a S.bio).
+  document.querySelectorAll('[data-bio-num]').forEach(el=>el.oninput=()=>{S.bio[el.getAttribute('data-bio-num')]=el.value;actualizarMolecular();});
+
+  // Antecedentes (expediente real): captura sin perder foco + guardar.
+  document.querySelectorAll('[data-ant]').forEach(el=>el.oninput=()=>{if(!S.antForm)S.antForm={};S.antForm[el.getAttribute('data-ant')]=el.value;});
+  document.querySelectorAll('[data-guardar-ant]').forEach(el=>el.onclick=()=>guardarAntecedentes());
+
+  // Guardar diagnóstico (expediente real)
+  document.querySelectorAll('[data-guardar-dx]').forEach(el=>el.onclick=()=>guardarDiagnostico());
 }
 
 render();
