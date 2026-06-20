@@ -361,6 +361,7 @@ const S={
   // --- Expediente (API real) ---
   expediente:null, expCargando:false, expGuardando:false, expMsg:'', expFor:null,
   antForm:null, antGuardando:false, antMsg:'',
+  estudForm:null, estudGuardando:false, estudMsg:'', estudAbierto:false,
   npForm:{ nombre:'', sexo:'F', fecha_nacimiento:'', telefono:'', correo:'', seguro:'', dx_resumen:'' },
   stage:{ size:18, skin:false, chest:false, inflam:false, axilar:true, fixed:false, intmam:false, infracl:false, supracl:false, mets:'no', edition:'8' },
   bio:{ re:90, rp:80, her2:'neg', ki67:22, grade:'2', subtype:0, sentinel:'si', axdiss:'no' }
@@ -672,6 +673,39 @@ async function guardarAntecedentes(){
   }
 }
 
+// Agrega un estudio (laboratorio, patología, imagen, molecular) vía POST.
+// Validación mínima: categoría y fecha. archivo_url es opcional (sin subida).
+async function guardarEstudio(){
+  if(!esNumId(S.patient)) return; // pacientes demo no persisten
+  const f=S.estudForm || {};
+  if(!f.categoria || !f.fecha){ S.estudMsg='Categoría y fecha son obligatorias.'; render(); return; }
+  S.estudGuardando=true; S.estudMsg=''; render();
+  try{
+    const r=await fetch(`/api/pacientes/${S.patient}/estudios`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body:JSON.stringify({
+        categoria:f.categoria, fecha:f.fecha,
+        descripcion:f.descripcion||null, archivo_url:f.archivo_url||null
+      })
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){
+      S.estudGuardando=false;
+      S.estudMsg=data.error||'No se pudo agregar el estudio.';
+      render(); return;
+    }
+    // Éxito: recarga el expediente y cierra el formulario (el nuevo aparece en la lista).
+    await cargarExpediente(S.patient, false);
+    S.estudGuardando=false; S.estudAbierto=false; S.estudForm=null; S.estudMsg=''; render();
+  }catch(e){
+    S.estudGuardando=false;
+    S.estudMsg='No se pudo conectar con el servidor.';
+    render();
+  }
+}
+
 function viewPatients(){
   // Carga una sola vez al entrar a la vista.
   if(!S.pacientesCargados && !S.cargando){ cargarPacientes(); }
@@ -973,7 +1007,73 @@ function tabExploracion(p){
 }
 
 /* ---- Estudios ---- */
+// Categorías canónicas (slug guardado en BD ↔ etiqueta e ícono de la tabla).
+const ESTUD_CATS=[
+  {slug:'laboratorio', label:'Laboratorio', icon:ICN.pulse},
+  {slug:'patologia',   label:'Patología',   icon:ICN.microscope},
+  {slug:'imagen',      label:'Imagen',       icon:ICN.glass},
+  {slug:'molecular',   label:'Moleculares / genéticos', icon:ICN.dna},
+];
+function fechaCorta(v){ return v ? String(v).slice(0,10) : '—'; }
+
+// Estudios reales del paciente: lista por categoría (mismo diseño de tablas) y
+// formulario de alta conectado a la API. Captura con foco quirúrgico.
+function tabEstudiosReal(estudios){
+  const norm=c=>String(c||'').trim().toLowerCase();
+  const tbl=(c)=>{
+    const rows=estudios.filter(e=>norm(e.categoria)===c.slug);
+    const body = rows.length
+      ? rows.map(r=>`<tr><td class="mono" style="color:var(--slate)">${esc(fechaCorta(r.fecha))}</td><td>${esc(r.descripcion||'—')}</td><td style="text-align:right">${r.archivo_url?`<a class="chip chip-info" href="${esc(r.archivo_url)}" target="_blank" rel="noopener">${ICN.pdf} Ver</a>`:'<span class="chip chip-line">—</span>'}</td></tr>`).join('')
+      : `<tr><td colspan="3" style="color:var(--muted);font-size:12.5px;padding:14px 16px">Sin estudios registrados</td></tr>`;
+    return `<div class="card" style="overflow:hidden">
+      <div style="display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--line)">
+        <span style="color:var(--petrol)">${c.icon}</span><b style="font-size:13.5px">${c.label}</b>
+      </div>
+      <table class="tablecard"><thead><tr><th>Fecha</th><th>Estudio</th><th style="text-align:right">Archivo</th></tr></thead>
+      <tbody>${body}</tbody></table>
+    </div>`;
+  };
+  return `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div class="section-title" style="margin:0">Estudios del paciente</div>
+      <button class="btn btn-primary" data-estud-toggle style="padding:8px 14px">${ICN.plus} Agregar estudio</button>
+    </div>
+    ${S.estudAbierto?formEstudio():''}
+    <div class="grid2" style="gap:16px">${ESTUD_CATS.map(tbl).join('')}</div>
+    <div class="note" style="margin-top:16px">${ICN.shield}<div>Los PDF y las imágenes (incluidas fotografías clínicas del paciente) se almacenan cifradas, con acceso restringido al médico tratante y registro de cada apertura.</div></div>`;
+}
+// Formulario de alta de estudio (mismo lenguaje visual del resto del expediente).
+function formEstudio(){
+  const f=S.estudForm || {};
+  const ok=/✓/.test(S.estudMsg);
+  return `<div class="card pad" style="margin-bottom:16px">
+    <div class="section-title" style="margin-bottom:12px">Nuevo estudio</div>
+    <div class="grid2" style="gap:14px">
+      <div class="field"><label>Categoría <span class="hint">· requerido</span></label>
+        <select class="select" data-estud="categoria">
+          <option value="">Selecciona…</option>
+          ${ESTUD_CATS.map(c=>`<option value="${c.slug}" ${f.categoria===c.slug?'selected':''}>${c.label}</option>`).join('')}
+        </select></div>
+      <div class="field"><label>Fecha <span class="hint">· requerido</span></label>
+        <input class="input" type="date" data-estud="fecha" value="${esc(f.fecha||'')}"></div>
+    </div>
+    <div class="field"><label>Descripción</label>
+      <textarea class="input" data-estud="descripcion" rows="2" style="min-height:60px;resize:vertical" placeholder="Hallazgos, resultado, nota…">${esc(f.descripcion||'')}</textarea></div>
+    <div class="field"><label>URL del archivo <span class="hint">· opcional</span></label>
+      <input class="input" type="url" data-estud="archivo_url" value="${esc(f.archivo_url||'')}" placeholder="https://…  (la subida de archivos llega después)"></div>
+    <div style="display:flex;align-items:center;justify-content:flex-end;gap:14px;margin-top:4px">
+      ${S.estudMsg?`<span style="font-size:13px;color:${ok?'var(--ok)':'#A23A3A'}">${esc(S.estudMsg)}</span>`:''}
+      <button class="btn btn-ghost" data-estud-cancel>Cancelar</button>
+      <button class="btn btn-primary" data-guardar-estud ${S.estudGuardando?'disabled':''}>${S.estudGuardando?'Guardando…':'Guardar estudio'}</button>
+    </div>
+  </div>`;
+}
 function tabEstudios(p){
+  // Paciente real (id numérico): lista y alta conectadas a la API.
+  const num=esNumId(S.patient);
+  const real=(num && S.expediente && S.expediente.paciente && String(S.expediente.paciente.id)===String(S.patient)) ? S.expediente : null;
+  if(real) return tabEstudiosReal(real.estudios||[]);
+  if(num) return `<div class="card pad"><p class="lead" style="margin:0">Cargando expediente…</p></div>`;
+  // Paciente demo: contenido ilustrativo original (sin API).
   const tbl=(title,icon,rows)=>`<div class="card" style="overflow:hidden">
     <div style="display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--line)">
       <span style="color:var(--petrol)">${icon}</span><b style="font-size:13.5px">${title}</b>
@@ -1274,6 +1374,12 @@ function bind(){
   // Antecedentes (expediente real): captura sin perder foco + guardar.
   document.querySelectorAll('[data-ant]').forEach(el=>el.oninput=()=>{if(!S.antForm)S.antForm={};S.antForm[el.getAttribute('data-ant')]=el.value;});
   document.querySelectorAll('[data-guardar-ant]').forEach(el=>el.onclick=()=>guardarAntecedentes());
+
+  // Estudios (expediente real): captura sin perder foco + abrir/cerrar/guardar.
+  document.querySelectorAll('[data-estud]').forEach(el=>el.oninput=el.onchange=()=>{if(!S.estudForm)S.estudForm={};S.estudForm[el.getAttribute('data-estud')]=el.value;});
+  document.querySelectorAll('[data-estud-toggle]').forEach(el=>el.onclick=()=>{S.estudAbierto=!S.estudAbierto; if(S.estudAbierto&&!S.estudForm)S.estudForm={categoria:'',fecha:'',descripcion:'',archivo_url:''}; S.estudMsg=''; render();});
+  document.querySelectorAll('[data-estud-cancel]').forEach(el=>el.onclick=()=>{S.estudAbierto=false; S.estudForm=null; S.estudMsg=''; render();});
+  document.querySelectorAll('[data-guardar-estud]').forEach(el=>el.onclick=()=>guardarEstudio());
 
   // Guardar diagnóstico (expediente real)
   document.querySelectorAll('[data-guardar-dx]').forEach(el=>el.onclick=()=>guardarDiagnostico());
