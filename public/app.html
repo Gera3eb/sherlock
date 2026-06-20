@@ -231,6 +231,16 @@ a{color:var(--petrol);text-decoration:none}
   .login-wrap{grid-template-columns:1fr}.login-art{display:none}
   .agenda-grid,.sec-grid{grid-template-columns:1fr}.grid2,.grid3{grid-template-columns:1fr}
 }
+/* Impresión del informe médico: oculta toda la interfaz y deja solo el documento. */
+@media print{
+  .sidebar,.topbar,.tabs,.report-actions{display:none !important}
+  /* Solo el informe es visible; el resto del árbol se oculta sin alterar el flujo. */
+  body *{visibility:hidden}
+  .report,.report *{visibility:visible}
+  .report{position:absolute;left:0;top:0;width:100%;margin:0;border:none;border-radius:0;box-shadow:none}
+  .app-shell{display:block}.main{padding:0}
+  @page{margin:14mm}
+}
 </style>
 </head>
 <body>
@@ -1232,12 +1242,80 @@ function actualizarMolecular(){
 }
 
 /* ---- Informe ---- */
+// Informe médico de paciente real: mismo formato visual, datos del expediente.
+function tabInformeReal(exp){
+  const d=curDoc();
+  const pac=exp.paciente||{};
+  const dx=exp.diagnostico; // el más reciente (o null si no hay)
+  const datos=(exp.antecedentes&&exp.antecedentes.datos)||{};
+  const sexoTxt=pac.sexo==='F'?'Femenino':pac.sexo==='M'?'Masculino':'—';
+  const edad=edadDesde(pac.fecha_nacimiento);
+  const bv=v=>(v==null||v==='')?'—':esc(String(v));
+  const hoy=new Date();
+  const fechaHoy=`${String(hoy.getDate()).padStart(2,'0')}/${String(hoy.getMonth()+1).padStart(2,'0')}/${hoy.getFullYear()}`;
+  const folio=`SHK-${hoy.getFullYear()}-${String(pac.id||0).padStart(4,'0')}`;
+  // Diagnóstico y perfil molecular desde el dx guardado (sin inventar si no hay).
+  let secDiag, secMol='';
+  if(dx){
+    const bm=dx.biomarcadores||{};
+    const her2txt=bm.her2==='pos'?'positivo (3+)':bm.her2==='low'?'2+ (HER2-low)':bm.her2==='neg'?'negativo':'—';
+    secDiag=`<div class="rep-sec"><h4>Diagnóstico</h4><p>${esc(dx.tipo_histologico||'Carcinoma de mama')}${dx.subtipo?`, ${esc(dx.subtipo)}`:''}${dx.grado?`, grado histológico ${esc(dx.grado)}`:''}. Estadificación clínica <b>${bv(dx.t)} ${bv(dx.n)} ${bv(dx.m)}</b> — <b>Etapa ${bv(dx.etapa)}</b>${dx.edicion_ajcc?` (AJCC ${esc(String(dx.edicion_ajcc))}ª ed.)`:''}.</p></div>`;
+    secMol=`<div class="rep-sec"><h4>Perfil molecular</h4><p>RE ${bv(bm.re)}${bm.re!=null&&bm.re!==''?'%':''} · RP ${bv(bm.rp)}${bm.rp!=null&&bm.rp!==''?'%':''} · HER2 ${her2txt} · Ki-67 ${bv(bm.ki67)}${bm.ki67!=null&&bm.ki67!==''?'%':''}.</p></div>`;
+  } else {
+    secDiag=`<div class="rep-sec"><h4>Diagnóstico</h4><p style="color:var(--muted)">Sin diagnóstico registrado aún.</p></div>`;
+  }
+  // Resumen clínico con datos reales (tamaño tumoral y antecedentes relevantes).
+  const hf=datos.heredofamiliares, al=datos.alergias;
+  const resumen=`Paciente ${esc(pac.nombre||'—')}, ${sexoTxt}${edad!=null?`, ${edad} años`:''}.`
+    + (dx&&dx.tamano_mm!=null?` Tumoración mamaria de ${bv(dx.tamano_mm)} mm.`:'')
+    + (hf?` Antecedentes heredo-familiares: ${esc(hf)}.`:'')
+    + (al?` Alergias: ${esc(al)}.`:'');
+  const plan=(dx&&dx.plan)?esc(dx.plan):'Plan de tratamiento pendiente de registro.';
+  return `<div class="report-actions" style="display:flex;gap:10px;margin-bottom:16px">
+      <button class="btn btn-brass" data-print>${ICN.print} Imprimir / PDF</button>
+      <button class="btn btn-ghost">${ICN.doc} Versión para aseguradora</button>
+      <button class="btn btn-ghost">Generar receta</button>
+    </div>
+    <div class="report">
+      <div class="rep-head">
+        <div>
+          <div style="display:flex;align-items:center;gap:10px"><div class="mark" style="width:34px;height:34px;border-radius:9px;background:var(--petrol);display:grid;place-items:center">${markSVG()}</div>
+          <div><div style="font-family:var(--serif);font-weight:600;font-size:18px;color:var(--petrol)">Top Oncology</div><div style="font-size:11px;color:var(--muted)">Hospital Ángeles Pedregal · CDMX</div></div></div>
+        </div>
+        <div style="text-align:right;font-size:12px;color:var(--slate)">
+          <div style="font-weight:600;color:var(--ink)">${esc(d.name)}</div>
+          <div>${esc(d.spec)}</div>
+          <div class="mono" style="margin-top:3px">Céd. prof. ${esc(d.cedula)} · Esp. ${esc(d.ced_esp)}</div>
+        </div>
+      </div>
+      <div class="rep-body">
+        <div style="display:flex;justify-content:space-between;margin-bottom:18px">
+          <div><div style="font-family:var(--serif);font-size:20px;font-weight:600">${esc(pac.nombre||'—')}</div><div style="font-size:12.5px;color:var(--slate)">${sexoTxt}${edad!=null?` · ${edad} años`:''}</div></div>
+          <div style="text-align:right;font-size:12px;color:var(--slate)"><div>Folio: <span class="mono">${esc(folio)}</span></div><div>Fecha: ${fechaHoy}</div></div>
+        </div>
+        ${secDiag}
+        ${secMol}
+        <div class="rep-sec"><h4>Resumen clínico</h4><p>${resumen}</p></div>
+        <div class="rep-sec"><h4>Plan de tratamiento</h4><p>${plan}</p></div>
+      </div>
+      <div class="rep-foot">
+        <div>Documento generado por Sherlock · válido con firma del médico tratante.</div>
+        <div class="sig">${esc(d.name)}<br><span style="font-size:11px;color:var(--muted)">${esc(d.spec)}</span></div>
+      </div>
+    </div>`;
+}
 function tabInforme(p){
+  // Paciente real (id numérico): informe armado con los datos guardados.
+  const num=esNumId(S.patient);
+  const real=(num && S.expediente && S.expediente.paciente && String(S.expediente.paciente.id)===String(S.patient)) ? S.expediente : null;
+  if(real) return tabInformeReal(real);
+  if(num) return `<div class="card pad"><p class="lead" style="margin:0">Cargando expediente…</p></div>`;
+  // Paciente demo: informe ilustrativo original (sin API).
   const s=S.stage,b=S.bio;
   const T=computeT(s),N=computeN(s),M=computeM(s);const grp=stageGroup(T.v,N.v,M.v);
   const d=curDoc();
-  return `<div style="display:flex;gap:10px;margin-bottom:16px">
-      <button class="btn btn-brass">${ICN.print} Imprimir / PDF</button>
+  return `<div class="report-actions" style="display:flex;gap:10px;margin-bottom:16px">
+      <button class="btn btn-brass" data-print>${ICN.print} Imprimir / PDF</button>
       <button class="btn btn-ghost">${ICN.doc} Versión para aseguradora</button>
       <button class="btn btn-ghost">Generar receta</button>
     </div>
@@ -1383,6 +1461,9 @@ function bind(){
 
   // Guardar diagnóstico (expediente real)
   document.querySelectorAll('[data-guardar-dx]').forEach(el=>el.onclick=()=>guardarDiagnostico());
+
+  // Informe médico: impresión nativa del navegador (solo el documento, vía @media print).
+  document.querySelectorAll('[data-print]').forEach(el=>el.onclick=()=>window.print());
 }
 
 render();
