@@ -303,6 +303,99 @@ app.post('/api/pacientes/:id/estudios', requireAuth, ensureMedicoId, async (req,
   }
 });
 
+// --- API de citas / agenda (todas aisladas por medico_id) ---
+
+// Lista las citas del médico en sesión para un día (por defecto hoy).
+// JOIN defensivo con pacientes: solo trae el nombre si el paciente es del MISMO
+// médico, de modo que ni un paciente_id heredado de otro tenant filtre datos.
+app.get('/api/citas', requireAuth, ensureMedicoId, async (req, res) => {
+  const fecha = req.query.fecha ? String(req.query.fecha).trim() : null;
+  if (fecha && !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    return res.status(400).json({ error: 'El parámetro "fecha" debe tener formato YYYY-MM-DD.' });
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT c.id, c.inicio, c.titulo, c.tipo, c.notas,
+              c.paciente_id, p.nombre AS paciente_nombre
+         FROM sherlock.citas c
+         LEFT JOIN sherlock.pacientes p
+                ON p.id = c.paciente_id AND p.medico_id = c.medico_id
+        WHERE c.medico_id = $1
+          AND c.inicio >= COALESCE($2::date, current_date)
+          AND c.inicio <  COALESCE($2::date, current_date) + interval '1 day'
+        ORDER BY c.inicio ASC`,
+      [req.session.user.medico_id, fecha]
+    );
+    await audit(req, 'ver', 'agenda', null, { fecha: fecha || 'hoy' });
+    res.json(rows);
+  } catch (e) {
+    console.error('[GET /api/citas]', e.message);
+    res.status(500).json({ error: 'No se pudieron obtener las citas.' });
+  }
+});
+
+// Crea una cita para el médico en sesión. Si referencia un paciente, ese paciente
+// debe ser del mismo médico (regla de oro: se valida con getPacientePropio).
+app.post('/api/citas', requireAuth, ensureMedicoId, async (req, res) => {
+  const b = req.body || {};
+  const inicio = String(b.inicio || '').trim();
+  const titulo = String(b.titulo || '').trim();
+  if (!inicio) return res.status(400).json({ error: 'El campo "inicio" es obligatorio.' });
+  if (isNaN(new Date(inicio).getTime())) {
+    return res.status(400).json({ error: 'El campo "inicio" no es una fecha/hora válida.' });
+  }
+  if (!titulo) return res.status(400).json({ error: 'El título de la cita es obligatorio.' });
+
+  // paciente_id es opcional; si viene, debe ser entero y pertenecer al médico.
+  let pacienteId = null;
+  if (b.paciente_id != null && b.paciente_id !== '') {
+    pacienteId = parseInt(b.paciente_id, 10);
+    if (!Number.isInteger(pacienteId)) {
+      return res.status(400).json({ error: 'El id de paciente no es válido.' });
+    }
+  }
+  try {
+    if (pacienteId != null) {
+      const paciente = await getPacientePropio(pacienteId, req.session.user.medico_id);
+      if (!paciente) {
+        return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+      }
+    }
+    const { rows } = await pool.query(
+      `INSERT INTO sherlock.citas (medico_id, paciente_id, inicio, titulo, tipo, notas)
+       VALUES ($1, $2, $3::timestamptz, $4, $5, $6)
+       RETURNING *`,
+      [req.session.user.medico_id, pacienteId, inicio, titulo, b.tipo || null, b.notas || null]
+    );
+    const cita = rows[0];
+    await audit(req, 'crear', 'cita', cita.id, { titulo: cita.titulo });
+    res.status(201).json(cita);
+  } catch (e) {
+    console.error('[POST /api/citas]', e.message);
+    res.status(500).json({ error: 'No se pudo crear la cita.' });
+  }
+});
+
+// Elimina (cancela) una cita del médico en sesión. 404 si no es suya.
+app.delete('/api/citas/:id', requireAuth, ensureMedicoId, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de cita no es válido.' });
+  try {
+    const { rowCount } = await pool.query(
+      'DELETE FROM sherlock.citas WHERE id = $1 AND medico_id = $2',
+      [id, req.session.user.medico_id]
+    );
+    if (!rowCount) {
+      return res.status(404).json({ error: 'Cita no encontrada o no pertenece a este médico.' });
+    }
+    await audit(req, 'eliminar', 'cita', id);
+    res.json({ ok: true, id });
+  } catch (e) {
+    console.error('[DELETE /api/citas/:id]', e.message);
+    res.status(500).json({ error: 'No se pudo eliminar la cita.' });
+  }
+});
+
 // SPA protegida — inyecta la identidad del usuario en el HTML
 app.get('/', requireAuth, (req, res) => {
   let html = fs.readFileSync(path.join(PUBLIC, 'app.html'), 'utf8');
