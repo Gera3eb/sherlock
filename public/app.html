@@ -382,6 +382,8 @@ const S={
   // --- Agenda / citas (API real) ---
   // agendaVista: rubro mostrado en la agenda ('consultas' por defecto | 'quimio').
   citas:[], citasCargadas:false, citasFecha:hoyISO(), agendaVista:'consultas',
+  // Modal "Nueva cita": tipo define la clasificación; lugar (quimio) se guarda en notas.
+  modalCita:false, citaForm:{ paciente_id:'', fecha:'', hora:'', tipo:'consulta', titulo:'', lugar:'', notas:'', tituloManual:false }, citaGuardando:false, citaError:'',
   // --- Pacientes (API real) ---
   pacientes:[], cargando:false, pacientesCargados:false, nuevoId:null,
   modalNuevo:false, modalGuardando:false, modalError:'',
@@ -541,7 +543,7 @@ function viewAgenda(){
       <div style="display:flex;gap:10px;align-items:center">
         <input class="input" type="date" data-citas-fecha value="${esc(S.citasFecha)}" style="width:auto;padding:8px 12px">
         <span class="chip chip-line">${ICN.google}<span style="margin-left:2px">Conectado a Google Calendar</span></span>
-        <button class="btn btn-primary">${ICN.plus} Nueva cita</button>
+        <button class="btn btn-primary" data-nueva-cita>${ICN.plus} Nueva cita</button>
       </div>
     </div>
     <div class="kpi" style="margin-bottom:22px">
@@ -573,7 +575,8 @@ function viewAgenda(){
         </div>
         <div class="note">${ICN.calendar}<div>Los asistentes pueden agendar en nombre del médico. Cada cita sincroniza con Google Calendar y dispara el correo de confirmación.</div></div>
       </div>
-    </div>`;
+    </div>
+    ${S.modalCita?modalNuevaCita():''}`;
 }
 
 /* ---------------- PATIENTS (API real) ---------------- */
@@ -917,6 +920,109 @@ async function guardarPaciente(){
   }catch(e){
     S.modalGuardando=false;
     S.modalError='No se pudo conectar con el servidor. Intenta de nuevo.';
+    render();
+  }
+}
+
+/* ---- Modal "Nueva cita" (crea cita real vía POST /api/citas) ---- */
+// Título sugerido cuando el médico aún no lo escribió a mano. Para Consulta con
+// paciente: "Consulta - <nombre>" (lo pidió el Dr. Soto); editable siempre.
+function sugerirTituloCita(){
+  const f=S.citaForm;
+  const p=S.pacientes.find(x=>String(x.id)===String(f.paciente_id));
+  const nom=p?p.nombre:'';
+  if(f.tipo==='quimio') return nom?`Quimioterapia - ${nom}`:'Quimioterapia';
+  return nom?`Consulta - ${nom}`:'';
+}
+// Modal de alta de cita (mismo lenguaje visual del modal de paciente).
+function modalNuevaCita(){
+  const f=S.citaForm;
+  const esQuimio=f.tipo==='quimio';
+  const pacOpts=S.pacientes.map(p=>`<option value="${esc(p.id)}" ${String(f.paciente_id)===String(p.id)?'selected':''}>${esc(p.nombre)}</option>`).join('');
+  return `<div class="np-overlay" data-cita-cancel style="position:fixed;inset:0;background:rgba(13,40,42,.45);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50">
+    <div class="card" style="width:100%;max-width:520px;max-height:90vh;overflow:auto" onclick="event.stopPropagation()">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between">
+        <div class="section-title">Nueva cita</div>
+        <button class="btn btn-ghost" data-cita-cancel style="padding:6px 10px">Cerrar</button>
+      </div>
+      <div style="padding:20px 22px">
+        ${S.citaError?`<div class="note" style="background:#FCE9E9;border-color:#F0C4C4;color:#A23A3A;margin-bottom:16px">${esc(S.citaError)}</div>`:''}
+        <div style="display:flex;gap:12px">
+          <div class="field" style="flex:1"><label>Tipo <span class="hint">· requerido</span></label>
+            <select class="select" data-cita-sel="tipo">
+              <option value="consulta" ${!esQuimio?'selected':''}>Consulta</option>
+              <option value="quimio" ${esQuimio?'selected':''}>Quimioterapia</option>
+            </select></div>
+          <div class="field" style="flex:1"><label>Paciente <span class="hint">· opcional</span></label>
+            <select class="select" data-cita-sel="paciente_id">
+              <option value="">Sin paciente</option>
+              ${pacOpts}
+            </select></div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div class="field" style="flex:1"><label>Fecha <span class="hint">· requerido</span></label><input class="input" type="date" data-cita="fecha" value="${esc(f.fecha)}"></div>
+          <div class="field" style="flex:1"><label>Hora <span class="hint">· requerido</span></label><input class="input" type="time" data-cita="hora" value="${esc(f.hora)}"></div>
+        </div>
+        <div class="field"><label>Título <span class="hint">· requerido</span></label><input class="input" data-cita="titulo" value="${esc(f.titulo)}" placeholder="Ej. Consulta de seguimiento"></div>
+        ${esQuimio
+          ? `<div class="field" style="margin-bottom:4px"><label>Lugar de administración</label><input class="input" data-cita="lugar" value="${esc(f.lugar)}" placeholder="Ej. Hospital Ángeles Pedregal"></div>`
+          : `<div class="field" style="margin-bottom:4px"><label>Notas <span class="hint">· opcional</span></label><input class="input" data-cita="notas" value="${esc(f.notas)}" placeholder="Notas de la consulta"></div>`}
+      </div>
+      <div style="padding:16px 22px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px">
+        <button class="btn btn-ghost" data-cita-cancel>Cancelar</button>
+        <button class="btn btn-primary" data-cita-save ${S.citaGuardando?'disabled':''}>${S.citaGuardando?'Guardando…':'Guardar'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+function abrirModalNuevaCita(){
+  // Pobla el select de pacientes (mismos del médico) si aún no se han cargado.
+  if(!S.pacientesCargados && !S.cargando){ cargarPacientes(); }
+  S.citaForm={ paciente_id:'', fecha:S.citasFecha||hoyISO(), hora:'', tipo:'consulta', titulo:'', lugar:'', notas:'', tituloManual:false };
+  S.citaError=''; S.citaGuardando=false; S.modalCita=true; render();
+}
+function cerrarModalNuevaCita(){ S.modalCita=false; S.citaGuardando=false; S.citaError=''; render(); }
+
+async function guardarCita(){
+  const f=S.citaForm;
+  const titulo=(f.titulo||'').trim();
+  if(!f.tipo){ S.citaError='Selecciona el tipo de cita.'; render(); return; }
+  if(!f.fecha || !f.hora){ S.citaError='La fecha y la hora son obligatorias.'; render(); return; }
+  if(!titulo){ S.citaError='El título de la cita es obligatorio.'; render(); return; }
+  const esQuimio=f.tipo==='quimio';
+  // En quimioterapia, el LUGAR de administración se guarda en notas (consistente con
+  // cómo la agenda ya muestra el lugar en quimio). En consulta, notas libre opcional.
+  const notas=(esQuimio?(f.lugar||''):(f.notas||'')).trim();
+  const body={
+    paciente_id: f.paciente_id||null,
+    inicio: `${f.fecha}T${f.hora}`,   // 'YYYY-MM-DDTHH:mm'
+    titulo,
+    tipo: f.tipo,
+    notas: notas||null
+  };
+  S.citaError=''; S.citaGuardando=true; render();
+  try{
+    const r=await fetch('/api/citas',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body:JSON.stringify(body)
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){
+      S.citaGuardando=false;
+      S.citaError=data.error||'No se pudo crear la cita.';
+      render();
+      return;
+    }
+    // Éxito: cierra el modal, abre la pestaña del rubro creado y refresca el día de
+    // la cita (cargarCitas ajusta S.citasFecha aunque la cita quedara en otra fecha).
+    S.modalCita=false; S.citaGuardando=false; S.citaError='';
+    S.agendaVista = esQuimio ? 'quimio' : 'consultas';
+    cargarCitas(f.fecha);
+  }catch(e){
+    S.citaGuardando=false;
+    S.citaError='No se pudo conectar con el servidor. Intenta de nuevo.';
     render();
   }
 }
@@ -1530,6 +1636,23 @@ function bind(){
   // Agenda: el segmento alterna el rubro mostrado (Consultas | Quimioterapia) sin
   // recargar; solo re-renderiza con el filtro elegido.
   document.querySelectorAll('[data-agenda-vista]').forEach(el=>el.onclick=()=>{ S.agendaVista=el.getAttribute('data-agenda-vista'); render(); });
+  // Agenda · Nueva cita: abrir/cerrar/guardar el modal.
+  document.querySelectorAll('[data-nueva-cita]').forEach(el=>el.onclick=()=>abrirModalNuevaCita());
+  document.querySelectorAll('[data-cita-cancel]').forEach(el=>el.onclick=()=>cerrarModalNuevaCita());
+  document.querySelectorAll('[data-cita-save]').forEach(el=>el.onclick=()=>guardarCita());
+  // Selects (tipo/paciente): re-renderizan para mostrar Lugar vs Notas y refrescar
+  // el título sugerido mientras el médico no lo haya escrito a mano.
+  document.querySelectorAll('[data-cita-sel]').forEach(el=>el.onchange=()=>{
+    S.citaForm[el.getAttribute('data-cita-sel')]=el.value;
+    if(!S.citaForm.tituloManual) S.citaForm.titulo=sugerirTituloCita();
+    render();
+  });
+  // Texto del modal: foco quirúrgico (oninput sin render). El título marca/limpia
+  // tituloManual para no pisar lo que el médico escribe.
+  document.querySelectorAll('[data-cita]').forEach(el=>el.oninput=()=>{
+    const k=el.getAttribute('data-cita'); S.citaForm[k]=el.value;
+    if(k==='titulo') S.citaForm.tituloManual = el.value.trim()!=='';
+  });
 
   // staging interactions
   document.querySelectorAll('[data-stage]').forEach(el=>el.onchange=()=>{S.stage[el.getAttribute('data-stage')]=el.checked;render();});
