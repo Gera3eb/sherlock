@@ -587,6 +587,10 @@ async function cargarPacientes(){
 
 function esc(v){ return String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function iniciales(nombre){ return String(nombre||'').trim().split(/\s+/).map(x=>x[0]||'').slice(0,2).join('').toUpperCase()||'·'; }
+// Presentación: el motor de estadificación y la BD trabajan el tumor en mm; el
+// médico lo ve y lo captura en cm. Convierte mm→cm sin ceros sobrantes
+// (25→"2.5", 0.5→"0.05"); devuelve '' si no hay número válido.
+function mmACm(mm){ const n=parseFloat(mm); return Number.isFinite(n)?String(+(n/10).toFixed(4)):''; }
 
 /* ---------------- EXPEDIENTE (API real) ---------------- */
 // Un id real de paciente es numérico (lo da la BD); los del demo son texto ('sara', ...).
@@ -980,7 +984,7 @@ function tabHistoriaReal(real){
     <div>
       <div class="card pad" style="margin-bottom:16px">
         <div class="section-title" style="margin-bottom:12px">Antecedentes</div>
-        ${ta('heredofamiliares','Heredo-familiares de cáncer','Familiares con cáncer: parentesco, tipo y edad…')}
+        ${ta('heredofamiliares','Heredo-familiares','Cáncer u otras enfermedades relevantes en la familia')}
         ${ta('patologicos','Personales patológicos','Enfermedades previas o crónicas, en tratamiento…')}
         ${ta('quirurgicos','Quirúrgicos','Cirugías previas con fecha y detalles…')}
         ${ta('no_patologicos','Personales no patológicos','Tabaquismo, alcohol, ejercicio, ocupación…')}
@@ -1055,15 +1059,18 @@ function tabExploracion(p){
   const bsaDu=0.007184*Math.pow(h,0.725)*Math.pow(w,0.425);
   const bmi=w/Math.pow(h/100,2);
   const v=(l,val,unit,range)=>`<div class="vital"><div class="vl">${l}</div><div><input class="input" value="${val}" style="text-align:center;padding:7px"></div><div class="vr">${unit} · <span style="color:var(--ok)">${range}</span></div></div>`;
+  // TA en un solo renglón: sistólica/diastólica juntas (dos inputs en la misma fila).
+  const vTA=(sis,dia)=>`<div class="vital"><div class="vl">TA</div><div style="display:flex;align-items:center;gap:6px"><input class="input" value="${sis}" style="text-align:center;padding:7px;width:64px"><span style="color:var(--muted)">/</span><input class="input" value="${dia}" style="text-align:center;padding:7px;width:64px"></div><div class="vr">mmHg · <span style="color:var(--ok)">sist/diast</span></div></div>`;
   return `<div class="grid2" style="grid-template-columns:1.25fr .75fr;gap:22px">
     <div class="card pad">
       <div class="section-title" style="margin-bottom:6px">Signos vitales</div>
       <p class="lead" style="font-size:12.5px;margin-bottom:10px">Con validación de rango. Se actualizan en cada consulta.</p>
+      <!-- Orden a confirmar por el Dr. Soto: basta reordenar estos renglones. -->
+      ${v('Frecuencia cardíaca','78','lpm','20–250')}
+      ${v('Frecuencia respiratoria','16','rpm','8–40')}
       ${v('Temperatura','36.6','°C','35–41')}
       ${v('SatO₂','97','%','30–100')}
-      ${v('Frecuencia cardíaca','78','lpm','20–250')}
-      ${v('T/A sistólica','128','mmHg','50–300')}
-      ${v('T/A diastólica','82','mmHg','10–180')}
+      ${vTA('128','82')}
       ${v('Peso','72.0','kg','20–200')}
       ${v('Estatura','162','cm','20–200')}
       <button class="btn btn-primary" style="margin-top:14px">${ICN.check} Confirmar y registrar</button>
@@ -1197,8 +1204,8 @@ function tabDiagnostico(p){
     <div>
       <div class="card pad" style="margin-bottom:16px">
         <div class="section-title" style="margin-bottom:14px">Tumor primario (T)</div>
-        <div class="field"><label>Tamaño clínico del tumor <span class="hint">en mm</span></label>
-          <input class="input" type="number" value="${s.size}" data-stage-num="size"></div>
+        <div class="field"><label>Tamaño del tumor <span class="hint">en cm</span></label>
+          <input class="input" type="number" step="0.1" value="${mmACm(s.size)}" data-stage-cm="size"></div>
         <div style="border-top:1px solid var(--paper-2);padding-top:6px">
           ${chk('skin','Infiltra piel (ulceración, edema, piel de naranja)')}
           ${chk('chest','Infiltra pared torácica')}
@@ -1336,7 +1343,7 @@ function tabInformeReal(exp){
   // Resumen clínico con datos reales (tamaño tumoral y antecedentes relevantes).
   const hf=datos.heredofamiliares, al=datos.alergias;
   const resumen=`Paciente ${esc(pac.nombre||'—')}, ${sexoTxt}${edad!=null?`, ${edad} años`:''}.`
-    + (dx&&dx.tamano_mm!=null?` Tumoración mamaria de ${bv(dx.tamano_mm)} mm.`:'')
+    + (dx&&dx.tamano_mm!=null?` Tumoración mamaria de ${bv(mmACm(dx.tamano_mm))} cm.`:'')
     + (hf?` Antecedentes heredo-familiares: ${esc(hf)}.`:'')
     + (al?` Alergias: ${esc(al)}.`:'');
   const plan=(dx&&dx.plan)?esc(dx.plan):'Plan de tratamiento pendiente de registro.';
@@ -1407,7 +1414,7 @@ function tabInforme(p){
         </div>
         <div class="rep-sec"><h4>Diagnóstico</h4><p>${p.dx}, ${molSubtype(b)}, grado histológico ${b.grade}. Estadificación clínica <b>${T.v} ${N.v} ${M.v}</b> — <b>Etapa ${grp.s}</b> (AJCC ${s.edition}ª ed.).</p></div>
         <div class="rep-sec"><h4>Perfil molecular</h4><p>RE ${b.re}% · RP ${b.rp}% · HER2 ${b.her2==='pos'?'positivo (3+)':b.her2==='low'?'2+ (HER2-low)':'negativo'} · Ki-67 ${b.ki67}%.</p></div>
-        <div class="rep-sec"><h4>Resumen clínico</h4><p>Paciente con tumoración mamaria de ${s.size} mm. ${N.r}. ${M.r}. Antecedente heredo-familiar de cáncer de mama y ovario. Estudio molecular BRCA1/2 en proceso.</p></div>
+        <div class="rep-sec"><h4>Resumen clínico</h4><p>Paciente con tumoración mamaria de ${mmACm(s.size)} cm. ${N.r}. ${M.r}. Antecedente heredo-familiar de cáncer de mama y ovario. Estudio molecular BRCA1/2 en proceso.</p></div>
         <div class="rep-sec"><h4>Plan de tratamiento</h4><p>Se propone abordaje multidisciplinario: valoración para quimioterapia neoadyuvante con la Dra. Escobar, cirugía oncoplástica conservadora vs. mastectomía según respuesta, y radioterapia adyuvante. Pendiente resultado de BRCA para consejería genética.</p></div>
       </div>
       <div class="rep-foot">
@@ -1510,8 +1517,10 @@ function bind(){
 
   // staging interactions
   document.querySelectorAll('[data-stage]').forEach(el=>el.onchange=()=>{S.stage[el.getAttribute('data-stage')]=el.checked;render();});
-  // Tamaño tumoral: actualiza S y refresca el motor SIN render() (conserva foco).
-  document.querySelectorAll('[data-stage-num]').forEach(el=>el.oninput=()=>{S.stage[el.getAttribute('data-stage-num')]=el.value;actualizarMotor();});
+  // Tamaño tumoral: el médico captura en cm; el motor y la BD trabajan en mm.
+  // Traducimos cm→mm (×10) en la frontera de captura y refrescamos el motor SIN
+  // render() (conserva foco). computeT y sus cortes en mm NO se tocan.
+  document.querySelectorAll('[data-stage-cm]').forEach(el=>el.oninput=()=>{const cm=parseFloat(el.value);S.stage[el.getAttribute('data-stage-cm')]=Number.isFinite(cm)?cm*10:'';actualizarMotor();});
   document.querySelectorAll('[data-stage-mets]').forEach(el=>el.onclick=()=>{S.stage.mets=el.getAttribute('data-stage-mets');render();});
   document.querySelectorAll('[data-stage-ed]').forEach(el=>el.onchange=()=>{S.stage.edition=el.value;render();});
   document.querySelectorAll('[data-bio-grade]').forEach(el=>el.onclick=()=>{S.bio.grade=el.getAttribute('data-bio-grade');render();});
