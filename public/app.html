@@ -380,7 +380,8 @@ const S={
   route:'agenda', doc:(__USER__&&__USER__.role&&DOCTORS[__USER__.role])?__USER__.role:'soto', role:'medico', patient:'sara', tab:'historia',
   ipadStep:0,
   // --- Agenda / citas (API real) ---
-  citas:[], citasCargadas:false, citasFecha:hoyISO(),
+  // agendaVista: rubro mostrado en la agenda ('consultas' por defecto | 'quimio').
+  citas:[], citasCargadas:false, citasFecha:hoyISO(), agendaVista:'consultas',
   // --- Pacientes (API real) ---
   pacientes:[], cargando:false, pacientesCargados:false, nuevoId:null,
   modalNuevo:false, modalGuardando:false, modalError:'',
@@ -482,12 +483,13 @@ async function cargarCitas(fecha){
 }
 // Hora HH:MM tomada del ISO tal cual se guardó (sin desfase de zona horaria).
 function horaCita(inicio){ const s=String(inicio||''); return s.length>=16 ? s.slice(11,16) : '—'; }
-// Color de la barra según el tipo de cita (mismo lenguaje visual del demo).
+// Clasificación de la agenda en DOS rubros (decisión del Dr. Soto):
+// Quimioterapia = tipo quimio/quimioterapia (acepta variantes); Consultas = todo
+// lo demás. Única fuente de verdad para KPIs, color de barra y filtrado.
+function esCitaQuimio(c){ return /quim|qt/.test(String((c&&c.tipo)||'').toLowerCase()); }
+// Color de la barra según el rubro de la cita (mismo lenguaje visual del demo).
 function colorCita(tipo){
-  const t=String(tipo||'').toLowerCase();
-  if(/quim|qt/.test(t)) return '#9A6A24';
-  if(/infus|zometa|neupogen|zoledr/.test(t)) return '#2D6E8E';
-  return '#0E5E63'; // consulta / valoración / por defecto
+  return esCitaQuimio({tipo}) ? '#9A6A24' : '#0E5E63'; // quimioterapia / consulta
 }
 // Fecha en español para el encabezado (mediodía para evitar saltos de día por zona).
 function fechaLargaES(iso){
@@ -501,10 +503,12 @@ function viewAgenda(){
   // Carga una sola vez por fecha al entrar a la vista.
   if(!S.citasCargadas){ cargarCitas(S.citasFecha); }
   const citas=S.citas||[];
-  const tlc=c=>String(c.tipo||'').toLowerCase();
-  const nQT=citas.filter(c=>/quim|qt/.test(tlc(c))).length;
-  const nVal=citas.filter(c=>/valor|consulta/.test(tlc(c))).length;
-  const nInf=citas.filter(c=>/infus|zometa|neupogen|zoledr/.test(tlc(c))).length;
+  // Dos rubros únicos: Quimioterapia y Consultas (todo lo demás).
+  const quimio   = citas.filter(esCitaQuimio);
+  const consultas= citas.filter(c=>!esCitaQuimio(c));
+  // Vista aislada (no combinada): por defecto Consultas; el toggle cambia el rubro.
+  const vista    = S.agendaVista==='quimio' ? 'quimio' : 'consultas';
+  const visibles = vista==='quimio' ? quimio : consultas;
   const filaCita=(c)=>{
     const hora=horaCita(c.inicio), color=colorCita(c.tipo);
     const titulo=esc(c.titulo||'(sin título)'), tipo=esc(c.tipo||'');
@@ -512,9 +516,13 @@ function viewAgenda(){
     const nombre=tienePac&&c.paciente_nombre?esc(c.paciente_nombre):null;
     const bold=nombre||titulo;
     const sub=nombre?`${titulo}${tipo?` · ${tipo}`:''}`:(tipo||'—');
+    // En quimioterapia, las notas guardan provisionalmente el LUGAR de administración
+    // (ej. "Hospital Ángeles Pedregal") hasta que exista columna propia. Se muestra
+    // solo si viene y solo en citas de quimioterapia.
+    const lugar = esCitaQuimio(c) && c.notas ? esc(c.notas) : '';
     const inner=`<div class="cal-time">${esc(hora)}</div>
       <div class="cal-bar" style="background:${color}"></div>
-      <div class="cal-main" style="flex:1"><b>${bold}</b><span>${sub}</span></div>
+      <div class="cal-main" style="flex:1"><b>${bold}</b><span>${sub}</span>${lugar?`<span style="color:var(--brass-deep);font-weight:600">Lugar: ${lugar}</span>`:''}</div>
       ${tienePac?`<span class="chip chip-line">Ver expediente</span>`:`<span class="chip chip-line" style="opacity:.6">Sin paciente</span>`}`;
     // Si la cita tiene paciente, toda la fila navega a su expediente (mismo
     // mecanismo que la lista de Pacientes: data-go="paciente" + data-pat).
@@ -522,9 +530,9 @@ function viewAgenda(){
       ? `<button class="cal-row" data-go="paciente" data-pat="${esc(c.paciente_id)}" style="width:100%;text-align:left;font:inherit;cursor:pointer">${inner}</button>`
       : `<div class="cal-row">${inner}</div>`;
   };
-  const lista = citas.length
-    ? citas.map(filaCita).join('')
-    : `<div class="card pad"><p class="lead" style="margin:0">Sin citas para este día.</p></div>`;
+  const lista = visibles.length
+    ? visibles.map(filaCita).join('')
+    : `<div class="card pad"><p class="lead" style="margin:0">Sin ${vista==='quimio'?'quimioterapia':'consultas'} para este día.</p></div>`;
   return `<div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:20px">
       <div>
         <div class="h-eyebrow">${esc(fechaLargaES(S.citasFecha))}</div>
@@ -538,13 +546,18 @@ function viewAgenda(){
     </div>
     <div class="kpi" style="margin-bottom:22px">
       <div class="k"><div class="kv">${citas.length}</div><div class="kl">Citas del día</div></div>
-      <div class="k"><div class="kv">${nQT}</div><div class="kl">En quimioterapia</div></div>
-      <div class="k"><div class="kv">${nVal}</div><div class="kl">Valoraciones / consultas</div></div>
-      <div class="k"><div class="kv">${nInf}</div><div class="kl">Centros de infusión</div></div>
+      <div class="k"><div class="kv">${consultas.length}</div><div class="kl">Consultas</div></div>
+      <div class="k"><div class="kv">${quimio.length}</div><div class="kl">Quimioterapia</div></div>
     </div>
     <div class="agenda-grid">
       <div>
-        <div class="section-title" style="margin-bottom:12px">Citas programadas</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
+          <div class="section-title" style="margin:0">Citas programadas</div>
+          <div class="seg" style="width:auto;flex:none">
+            <button class="${vista==='consultas'?'on':''}" data-agenda-vista="consultas" style="flex:none;padding:7px 16px;border-right:1px solid var(--line)">Consultas</button>
+            <button class="${vista==='quimio'?'on':''}" data-agenda-vista="quimio" style="flex:none;padding:7px 16px">Quimioterapia</button>
+          </div>
+        </div>
         ${lista}
       </div>
       <div>
@@ -1514,6 +1527,9 @@ function bind(){
 
   // Agenda: cambiar el día recarga las citas de esa fecha.
   document.querySelectorAll('[data-citas-fecha]').forEach(el=>el.onchange=()=>{ if(el.value) cargarCitas(el.value); });
+  // Agenda: el segmento alterna el rubro mostrado (Consultas | Quimioterapia) sin
+  // recargar; solo re-renderiza con el filtro elegido.
+  document.querySelectorAll('[data-agenda-vista]').forEach(el=>el.onclick=()=>{ S.agendaVista=el.getAttribute('data-agenda-vista'); render(); });
 
   // staging interactions
   document.querySelectorAll('[data-stage]').forEach(el=>el.onchange=()=>{S.stage[el.getAttribute('data-stage')]=el.checked;render();});
