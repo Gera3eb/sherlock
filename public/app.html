@@ -389,6 +389,16 @@ const S={
   modalNuevo:false, modalGuardando:false, modalError:'',
   // --- Expediente (API real) ---
   expediente:null, expCargando:false, expGuardando:false, expMsg:'', expFor:null,
+  // --- Evolución: notas y tratamientos con ciclos (API real, solo lectura por ahora) ---
+  // Cada uno se carga una sola vez por paciente: la bandera "Cargados" indica que ya
+  // llegaron y "For" recuerda de qué paciente, para recargar al cambiar de expediente.
+  notas:[], notasCargadas:false, notasFor:null, notasCargando:false,
+  tratamientos:[], tratamientosCargados:false, tratamientosFor:null, tratamientosCargando:false,
+  // Captura en Evolución (modales): nota, tratamiento y ciclo. Foco quirúrgico:
+  // cada input escribe en su *Form sin re-render (igual que npForm/citaForm).
+  modalNota:false, notaForm:null, notaGuardando:false, notaError:'',
+  modalTrat:false, tratForm:null, tratGuardando:false, tratError:'',
+  modalCiclo:false, cicloForm:null, cicloGuardando:false, cicloError:'',
   antForm:null, antGuardando:false, antMsg:'',
   estudForm:null, estudGuardando:false, estudMsg:'', estudAbierto:false,
   npForm:{ nombre:'', sexo:'F', fecha_nacimiento:'', telefono:'', correo:'', seguro:'', dx_resumen:'' },
@@ -645,6 +655,26 @@ async function cargarExpediente(id, prefill=true){
     S.expMsg='No se pudo conectar con el servidor.';
     render();
   }
+}
+
+// Carga las notas de evolución del paciente (más reciente primero, según la API).
+// Una vez por paciente: notasFor recuerda de quién, notasCargando evita pedirlas dos veces.
+async function cargarNotas(id){
+  S.notasCargando=true; S.notasCargadas=false; S.notasFor=String(id);
+  try{
+    const r=await fetch(`/api/pacientes/${id}/notas`,{credentials:'same-origin'});
+    S.notas = r.ok ? await r.json() : [];
+  }catch(e){ S.notas=[]; }
+  S.notasCargando=false; S.notasCargadas=true; render();
+}
+// Carga los tratamientos del paciente, cada uno ya con su arreglo "ciclos" ordenado.
+async function cargarTratamientos(id){
+  S.tratamientosCargando=true; S.tratamientosCargados=false; S.tratamientosFor=String(id);
+  try{
+    const r=await fetch(`/api/pacientes/${id}/tratamientos`,{credentials:'same-origin'});
+    S.tratamientos = r.ok ? await r.json() : [];
+  }catch(e){ S.tratamientos=[]; }
+  S.tratamientosCargando=false; S.tratamientosCargados=true; render();
 }
 
 // Siembra S.stage / S.bio con el último diagnóstico guardado, para que el motor
@@ -1059,6 +1089,7 @@ function viewPatient(){
     ['exploracion','Exploración',ICN.pulse],
     ['estudios','Estudios',ICN.microscope],
     ['diagnostico','Diagnóstico · Mama',ICN.target],
+    ['evolucion','Evolución',ICN.pulse],
     ['informe','Informe médico',ICN.print],
   ];
   return `<button class="btn btn-ghost" data-go="pacientes" style="margin-bottom:16px">${ICN.back} Pacientes</button>
@@ -1081,6 +1112,7 @@ function tabRouter(p){
     case 'exploracion': return tabExploracion(p);
     case 'estudios': return tabEstudios(p);
     case 'diagnostico': return tabDiagnostico(p);
+    case 'evolucion': return tabEvolucion(p);
     case 'informe': return tabInforme(p);
     default: return tabHistoria(p);
   }
@@ -1220,6 +1252,20 @@ const ESTUD_CATS=[
   {slug:'molecular',   label:'Moleculares / genéticos', icon:ICN.dna},
 ];
 function fechaCorta(v){ return v ? String(v).slice(0,10) : '—'; }
+// Fecha (date) a DD/MM/YYYY sin desfase de zona horaria (solo reordena el ISO).
+function fechaDMY(v){
+  if(!v) return '—';
+  const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(v).slice(0,10);
+}
+// Fecha/hora (timestamptz) legible en español para las notas de evolución.
+function fechaHoraES(iso){
+  if(!iso) return '—';
+  const d=new Date(String(iso));
+  if(isNaN(d)) return String(iso).slice(0,16).replace('T',' ');
+  const s=d.toLocaleString('es-MX',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  return s.charAt(0).toUpperCase()+s.slice(1);
+}
 
 // Estudios reales del paciente: lista por categoría (mismo diseño de tablas) y
 // formulario de alta conectado a la API. Captura con foco quirúrgico.
@@ -1294,6 +1340,229 @@ function tabEstudios(p){
     ${tbl('Moleculares / genéticos',ICN.dna,STUDIES.mol)}
   </div>
   <div class="note" style="margin-top:16px">${ICN.shield}<div>Los PDF y las imágenes (incluidas fotografías clínicas del paciente) se almacenan cifradas, con acceso restringido al médico tratante y registro de cada apertura.</div></div>`;
+}
+
+/* ---- Evolución: notas y tratamientos con ciclos (solo lectura por ahora) ---- */
+// Render de un tratamiento con su lista de ciclos en orden (numero + fecha).
+function evolTratamientoCard(t){
+  const ciclos = Array.isArray(t.ciclos) ? t.ciclos : [];
+  const tipo = t.tipo ? ` <span class="chip chip-line" style="font-size:11px">${esc(t.tipo)}</span>` : '';
+  const cuerpo = ciclos.length
+    ? `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${ciclos.map(c=>
+        `<span class="chip chip-info" style="font-size:12px">${esc(c.numero||'—')} · ${esc(fechaDMY(c.fecha))}</span>`).join('')}</div>`
+    : `<div style="color:var(--muted);font-size:12.5px;margin-top:8px">Sin ciclos registrados</div>`;
+  return `<div class="card pad" style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:9px">
+      <span style="color:var(--petrol)">${ICN.pill||ICN.pulse}</span>
+      <b style="font-size:13.5px">${esc(t.nombre||'—')}</b>${tipo}
+      ${t.activo===false?'<span class="chip chip-line" style="font-size:11px">Inactivo</span>':''}
+      <button class="btn btn-ghost" data-ciclo-add="${esc(t.id)}" style="margin-left:auto;padding:6px 11px;font-size:12px">${ICN.plus} Agregar ciclo</button>
+    </div>
+    ${cuerpo}
+  </div>`;
+}
+// Render de una nota de evolución: encabezado con fecha/hora, signos vitales
+// presentes (omite nulos) y los textos clínicos no vacíos.
+function evolNotaCard(n){
+  const sv=[['TA',n.ta],['FC',n.fc],['SatO2',n.sato2],['FR',n.fr],['Peso',n.peso],['Talla',n.talla]]
+    .filter(x=>x[1]!=null && String(x[1]).trim()!=='')
+    .map(x=>`<span class="chip chip-line" style="font-size:11.5px">${x[0]}: ${esc(x[1])}</span>`).join('');
+  const campo=(label,val)=> (val!=null && String(val).trim()!=='')
+    ? `<div style="margin-top:8px"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--slate)">${label}</div>
+       <div style="font-size:13px;color:var(--ink);white-space:pre-wrap">${esc(val)}</div></div>` : '';
+  return `<div class="card pad" style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:4px">
+      <span style="color:var(--petrol)">${ICN.doc}</span>
+      <b style="font-size:13px">${esc(fechaHoraES(n.fecha_hora))}</b>
+    </div>
+    ${sv?`<div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:6px">${sv}</div>`:''}
+    ${campo('Síntomas',n.sintomas)}
+    ${campo('Exploración',n.exploracion)}
+    ${campo('Evolutivo',n.evolutivo)}
+    ${campo('Plan',n.plan)}
+  </div>`;
+}
+function tabEvolucionReal(){
+  const tratListos = S.tratamientosCargados && S.tratamientosFor===String(S.patient);
+  const notasListas = S.notasCargadas && S.notasFor===String(S.patient);
+  const cargando = `<div class="card pad"><p class="lead" style="margin:0">Cargando…</p></div>`;
+
+  const tratSec = !tratListos ? cargando
+    : (S.tratamientos.length ? S.tratamientos.map(evolTratamientoCard).join('')
+        : `<div class="card pad"><p style="margin:0;color:var(--muted);font-size:13px">Sin tratamientos registrados</p></div>`);
+
+  const notasSec = !notasListas ? cargando
+    : (S.notas.length ? S.notas.map(evolNotaCard).join('')
+        : `<div class="card pad"><p style="margin:0;color:var(--muted);font-size:13px">Sin notas de evolución</p></div>`);
+
+  const cab=(titulo,boton)=>`<div style="display:flex;align-items:center;justify-content:space-between;margin:${titulo==='Tratamientos'?'0':'24px'} 0 12px">
+      <div class="section-title" style="margin:0">${titulo}</div>${boton}</div>`;
+  const btnTrat=`<button class="btn btn-primary" data-evol-trat style="padding:8px 14px">${ICN.plus} Nuevo tratamiento</button>`;
+  const btnNota=`<button class="btn btn-primary" data-evol-nota style="padding:8px 14px">${ICN.plus} Nueva nota</button>`;
+
+  return `${cab('Tratamientos',btnTrat)}
+    ${tratSec}
+    ${cab('Notas de evolución',btnNota)}
+    ${notasSec}
+    <div class="note" style="margin-top:16px">${ICN.info}<div>Seguimiento del paciente subsecuente: registra notas de evolución y tratamientos con sus ciclos.</div></div>
+    ${S.modalNota?modalNuevaNota():''}
+    ${S.modalTrat?modalNuevoTratamiento():''}
+    ${S.modalCiclo?modalNuevoCiclo():''}`;
+}
+function tabEvolucion(p){
+  const num=esNumId(S.patient);
+  const real=(num && S.expediente && S.expediente.paciente && String(S.expediente.paciente.id)===String(S.patient)) ? S.expediente : null;
+  if(real){
+    // Al entrar a la pestaña con paciente real: carga notas y tratamientos una vez por paciente.
+    if(S.notasFor!==String(S.patient) && !S.notasCargando) cargarNotas(S.patient);
+    if(S.tratamientosFor!==String(S.patient) && !S.tratamientosCargando) cargarTratamientos(S.patient);
+    return tabEvolucionReal();
+  }
+  if(num) return `<div class="card pad"><p class="lead" style="margin:0">Cargando expediente…</p></div>`;
+  // Paciente demo (id no numérico): estado simple, sin botones de captura ni API.
+  return `<div class="card pad">
+    <div class="section-title" style="margin:0 0 8px">Evolución</div>
+    <p style="margin:0;color:var(--muted);font-size:13px">Disponible al abrir un paciente real.</p>
+  </div>`;
+}
+
+/* ---- Captura en Evolución: nota, tratamiento y ciclo (POST a la API) ---- */
+// Cabecera/pie reutilizables, mismo lenguaje visual que los modales de cita/paciente.
+function evolModalShell(titulo, cancelAttr, errMsg, cuerpo, saveAttr, guardando){
+  return `<div class="np-overlay" ${cancelAttr} style="position:fixed;inset:0;background:rgba(13,40,42,.45);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50">
+    <div class="card" style="width:100%;max-width:560px;max-height:90vh;overflow:auto" onclick="event.stopPropagation()">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between">
+        <div class="section-title">${titulo}</div>
+        <button class="btn btn-ghost" ${cancelAttr} style="padding:6px 10px">Cerrar</button>
+      </div>
+      <div style="padding:20px 22px">
+        ${errMsg?`<div class="note" style="background:#FCE9E9;border-color:#F0C4C4;color:#A23A3A;margin-bottom:16px">${esc(errMsg)}</div>`:''}
+        ${cuerpo}
+      </div>
+      <div style="padding:16px 22px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px">
+        <button class="btn btn-ghost" ${cancelAttr}>Cancelar</button>
+        <button class="btn btn-primary" ${saveAttr} ${guardando?'disabled':''}>${guardando?'Guardando…':'Guardar'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+// Modal "Nueva nota de evolución": todos los campos son opcionales.
+function modalNuevaNota(){
+  const f=S.notaForm||{};
+  const sv=(k,label,ph,extra='')=>`<div class="field" style="flex:1"><label>${label}</label><input class="input" data-nota="${k}" value="${esc(f[k]||'')}" placeholder="${ph}" ${extra}></div>`;
+  const ta=(k,label,ph)=>`<div class="field"><label>${label}</label><textarea class="input" data-nota="${k}" rows="3" style="min-height:78px;resize:vertical" placeholder="${ph}">${esc(f[k]||'')}</textarea></div>`;
+  const cuerpo=`
+    <div style="display:flex;gap:12px">
+      <div class="field" style="flex:1"><label>Fecha <span class="hint">· opcional</span></label><input class="input" type="date" data-nota="fecha" value="${esc(f.fecha||'')}"></div>
+      <div class="field" style="flex:1"><label>Hora <span class="hint">· opcional</span></label><input class="input" type="time" data-nota="hora" value="${esc(f.hora||'')}"></div>
+    </div>
+    <div class="hint" style="margin:-4px 0 10px">Si dejas fecha y hora vacías, se registra con la fecha y hora actuales.</div>
+    <div style="display:flex;gap:12px">${sv('ta','TA','120/80')}${sv('fc','FC','78')}${sv('sato2','SatO2','97%')}</div>
+    <div style="display:flex;gap:12px">${sv('fr','FR','16')}${sv('peso','Peso (kg)','65.850')}${sv('talla','Talla (m)','1.76')}</div>
+    ${ta('sintomas','Síntomas','Motivo de la visita, síntomas referidos…')}
+    ${ta('exploracion','Exploración física','Hallazgos a la exploración…')}
+    ${ta('evolutivo','Evolutivo','Evolución desde la última visita…')}
+    ${ta('plan','Plan','Conducta, indicaciones, próximo control…')}`;
+  return evolModalShell('Nueva nota de evolución','data-nota-cancel',S.notaError,cuerpo,'data-nota-save',S.notaGuardando);
+}
+// Modal "Nuevo tratamiento": nombre requerido; tipo libre con sugerencias.
+function modalNuevoTratamiento(){
+  const f=S.tratForm||{};
+  const cuerpo=`
+    <div class="field"><label>Nombre <span class="hint">· requerido</span></label>
+      <input class="input" data-trat="nombre" value="${esc(f.nombre||'')}" placeholder="Ej. NIVOLUMAB + IPILIMUMAB"></div>
+    <div class="field" style="margin-bottom:4px"><label>Tipo <span class="hint">· opcional</span></label>
+      <input class="input" list="evol-tipos" data-trat="tipo" value="${esc(f.tipo||'')}" placeholder="Ej. inmunoterapia">
+      <datalist id="evol-tipos">
+        <option value="quimioterapia"></option><option value="inmunoterapia"></option>
+        <option value="hormonal"></option><option value="soporte"></option><option value="otro"></option>
+      </datalist></div>`;
+  return evolModalShell('Nuevo tratamiento','data-trat-cancel',S.tratError,cuerpo,'data-trat-save',S.tratGuardando);
+}
+// Modal "Agregar ciclo": número y fecha requeridos; notas opcional.
+function modalNuevoCiclo(){
+  const f=S.cicloForm||{};
+  const t=S.tratamientos.find(x=>String(x.id)===String(f.tratId));
+  const cuerpo=`
+    ${t?`<div class="hint" style="margin-bottom:12px">Tratamiento: <b>${esc(t.nombre||'—')}</b></div>`:''}
+    <div style="display:flex;gap:12px">
+      <div class="field" style="flex:1"><label>Número <span class="hint">· requerido</span></label><input class="input" data-ciclo="numero" value="${esc(f.numero||'')}" placeholder="Ej. C3"></div>
+      <div class="field" style="flex:1"><label>Fecha <span class="hint">· requerido</span></label><input class="input" type="date" data-ciclo="fecha" value="${esc(f.fecha||'')}"></div>
+    </div>
+    <div class="field" style="margin-bottom:4px"><label>Notas <span class="hint">· opcional</span></label>
+      <textarea class="input" data-ciclo="notas" rows="2" style="min-height:60px;resize:vertical" placeholder="Tolerancia, toxicidad, ajustes…">${esc(f.notas||'')}</textarea></div>`;
+  return evolModalShell('Agregar ciclo','data-ciclo-cancel',S.cicloError,cuerpo,'data-ciclo-save',S.cicloGuardando);
+}
+
+function abrirModalNota(){
+  S.notaForm={ fecha:'', hora:'', ta:'', fc:'', sato2:'', fr:'', peso:'', talla:'', sintomas:'', exploracion:'', evolutivo:'', plan:'' };
+  S.notaError=''; S.notaGuardando=false; S.modalNota=true; render();
+}
+function cerrarModalNota(){ S.modalNota=false; S.notaGuardando=false; S.notaError=''; render(); }
+function abrirModalTrat(){
+  S.tratForm={ nombre:'', tipo:'' };
+  S.tratError=''; S.tratGuardando=false; S.modalTrat=true; render();
+}
+function cerrarModalTrat(){ S.modalTrat=false; S.tratGuardando=false; S.tratError=''; render(); }
+function abrirModalCiclo(tratId){
+  S.cicloForm={ tratId:String(tratId), numero:'', fecha:'', notas:'' };
+  S.cicloError=''; S.cicloGuardando=false; S.modalCiclo=true; render();
+}
+function cerrarModalCiclo(){ S.modalCiclo=false; S.cicloGuardando=false; S.cicloError=''; render(); }
+
+// Normaliza un campo de texto a su valor o null (los vacíos no se envían como '').
+function oNull(v){ const s=(v==null?'':String(v)).trim(); return s||null; }
+
+async function guardarNota(){
+  const f=S.notaForm||{};
+  // fecha_hora es opcional: si hay fecha la combinamos con la hora (00:00 si falta);
+  // si no hay fecha, se omite y el backend pone "ahora".
+  let fecha_hora=null;
+  if(f.fecha){ fecha_hora=`${f.fecha}T${f.hora||'00:00'}`; }
+  const body={ fecha_hora,
+    ta:oNull(f.ta), fc:oNull(f.fc), sato2:oNull(f.sato2), fr:oNull(f.fr), peso:oNull(f.peso), talla:oNull(f.talla),
+    sintomas:oNull(f.sintomas), exploracion:oNull(f.exploracion), evolutivo:oNull(f.evolutivo), plan:oNull(f.plan) };
+  S.notaError=''; S.notaGuardando=true; render();
+  try{
+    const r=await fetch(`/api/pacientes/${S.patient}/notas`,{
+      method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body:JSON.stringify(body)
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){ S.notaGuardando=false; S.notaError=data.error||'No se pudo guardar la nota.'; render(); return; }
+    S.modalNota=false; S.notaGuardando=false; S.notaError='';
+    await cargarNotas(S.patient);   // recarga: la nota nueva aparece arriba
+  }catch(e){ S.notaGuardando=false; S.notaError='No se pudo conectar con el servidor. Intenta de nuevo.'; render(); }
+}
+async function guardarTratamiento(){
+  const f=S.tratForm||{};
+  if(!(f.nombre||'').trim()){ S.tratError='El nombre del tratamiento es obligatorio.'; render(); return; }
+  const body={ nombre:f.nombre.trim(), tipo:oNull(f.tipo) };
+  S.tratError=''; S.tratGuardando=true; render();
+  try{
+    const r=await fetch(`/api/pacientes/${S.patient}/tratamientos`,{
+      method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body:JSON.stringify(body)
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){ S.tratGuardando=false; S.tratError=data.error||'No se pudo crear el tratamiento.'; render(); return; }
+    S.modalTrat=false; S.tratGuardando=false; S.tratError='';
+    await cargarTratamientos(S.patient);
+  }catch(e){ S.tratGuardando=false; S.tratError='No se pudo conectar con el servidor. Intenta de nuevo.'; render(); }
+}
+async function guardarCiclo(){
+  const f=S.cicloForm||{};
+  if(!(f.numero||'').trim()){ S.cicloError='El número del ciclo es obligatorio.'; render(); return; }
+  if(!f.fecha){ S.cicloError='La fecha del ciclo es obligatoria.'; render(); return; }
+  const body={ numero:f.numero.trim(), fecha:f.fecha, notas:oNull(f.notas) };
+  S.cicloError=''; S.cicloGuardando=true; render();
+  try{
+    const r=await fetch(`/api/tratamientos/${f.tratId}/ciclos`,{
+      method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body:JSON.stringify(body)
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){ S.cicloGuardando=false; S.cicloError=data.error||'No se pudo agregar el ciclo.'; render(); return; }
+    S.modalCiclo=false; S.cicloGuardando=false; S.cicloError='';
+    await cargarTratamientos(S.patient);   // el ciclo aparece en su tratamiento, ordenado por fecha
+  }catch(e){ S.cicloGuardando=false; S.cicloError='No se pudo conectar con el servidor. Intenta de nuevo.'; render(); }
 }
 
 /* ---- Diagnóstico: motor de estadificación mama ---- */
@@ -1653,6 +1922,22 @@ function bind(){
     const k=el.getAttribute('data-cita'); S.citaForm[k]=el.value;
     if(k==='titulo') S.citaForm.tituloManual = el.value.trim()!=='';
   });
+
+  // Evolución · captura: abrir modales (nota, tratamiento, ciclo por tratamiento)
+  document.querySelectorAll('[data-evol-nota]').forEach(el=>el.onclick=()=>abrirModalNota());
+  document.querySelectorAll('[data-evol-trat]').forEach(el=>el.onclick=()=>abrirModalTrat());
+  document.querySelectorAll('[data-ciclo-add]').forEach(el=>el.onclick=()=>abrirModalCiclo(el.getAttribute('data-ciclo-add')));
+  // Cancelar / guardar de cada modal
+  document.querySelectorAll('[data-nota-cancel]').forEach(el=>el.onclick=()=>cerrarModalNota());
+  document.querySelectorAll('[data-nota-save]').forEach(el=>el.onclick=()=>guardarNota());
+  document.querySelectorAll('[data-trat-cancel]').forEach(el=>el.onclick=()=>cerrarModalTrat());
+  document.querySelectorAll('[data-trat-save]').forEach(el=>el.onclick=()=>guardarTratamiento());
+  document.querySelectorAll('[data-ciclo-cancel]').forEach(el=>el.onclick=()=>cerrarModalCiclo());
+  document.querySelectorAll('[data-ciclo-save]').forEach(el=>el.onclick=()=>guardarCiclo());
+  // Foco quirúrgico: cada campo escribe en su *Form sin re-render destructivo.
+  document.querySelectorAll('[data-nota]').forEach(el=>el.oninput=el.onchange=()=>{S.notaForm[el.getAttribute('data-nota')]=el.value;});
+  document.querySelectorAll('[data-trat]').forEach(el=>el.oninput=el.onchange=()=>{S.tratForm[el.getAttribute('data-trat')]=el.value;});
+  document.querySelectorAll('[data-ciclo]').forEach(el=>el.oninput=el.onchange=()=>{S.cicloForm[el.getAttribute('data-ciclo')]=el.value;});
 
   // staging interactions
   document.querySelectorAll('[data-stage]').forEach(el=>el.onchange=()=>{S.stage[el.getAttribute('data-stage')]=el.checked;render();});
