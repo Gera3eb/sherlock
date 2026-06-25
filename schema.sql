@@ -78,6 +78,47 @@ CREATE TABLE IF NOT EXISTS sherlock.diagnosticos (
   creado            timestamptz DEFAULT now()
 );
 
+-- Notas de evolución (seguimiento de pacientes subsecuentes): una por visita.
+-- Los signos vitales se guardan como TEXTO porque así los captura el médico.
+CREATE TABLE IF NOT EXISTS sherlock.notas_evolucion (
+  id           serial PRIMARY KEY,
+  paciente_id  int REFERENCES sherlock.pacientes(id),
+  medico_id    int,
+  fecha_hora   timestamptz DEFAULT now(),
+  ta           text,
+  fc           text,
+  sato2        text,
+  fr           text,
+  peso         text,
+  talla        text,
+  sintomas     text,
+  exploracion  text,
+  evolutivo    text,
+  plan         text,
+  creado       timestamptz DEFAULT now()
+);
+
+-- Tratamientos (esquemas terapéuticos) del paciente.
+CREATE TABLE IF NOT EXISTS sherlock.tratamientos (
+  id           serial PRIMARY KEY,
+  paciente_id  int REFERENCES sherlock.pacientes(id),
+  medico_id    int,
+  nombre       text,
+  tipo         text,
+  activo       boolean DEFAULT true,
+  creado       timestamptz DEFAULT now()
+);
+
+-- Ciclos de un tratamiento (C1, C2, ...).
+CREATE TABLE IF NOT EXISTS sherlock.ciclos (
+  id              serial PRIMARY KEY,
+  tratamiento_id  int REFERENCES sherlock.tratamientos(id),
+  numero          text,
+  fecha           date,
+  notas           text,
+  creado          timestamptz DEFAULT now()
+);
+
 -- Bitácora de auditoría — SOLO-APPEND (registro inmutable).
 -- Requerida para cumplimiento NOM-004 / LFPDPPP: quién hizo qué, sobre qué
 -- registro y cuándo. NO se hacen UPDATE/DELETE sobre esta tabla.
@@ -96,3 +137,6 @@ CREATE TABLE IF NOT EXISTS sherlock.auditoria (
 -- Índices
 CREATE INDEX IF NOT EXISTS idx_auditoria_entidad ON sherlock.auditoria (entidad, entidad_id);
 CREATE INDEX IF NOT EXISTS idx_pacientes_medico  ON sherlock.pacientes (medico_id);
+CREATE INDEX IF NOT EXISTS idx_notas_paciente        ON sherlock.notas_evolucion (paciente_id);
+CREATE INDEX IF NOT EXISTS idx_tratamientos_paciente ON sherlock.tratamientos (paciente_id);
+CREATE INDEX IF NOT EXISTS idx_ciclos_tratamiento    ON sherlock.ciclos (tratamiento_id);

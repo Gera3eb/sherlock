@@ -303,6 +303,222 @@ app.post('/api/pacientes/:id/estudios', requireAuth, ensureMedicoId, async (req,
   }
 });
 
+// --- API de notas de evolución y tratamiento (todas aisladas por medico_id) ---
+
+// Regla de oro para tratamientos: confirma que el tratamiento exista y que su
+// paciente pertenezca al médico en sesión, vía join tratamiento->paciente->medico.
+// Devuelve la fila del tratamiento, o null si no es suyo / no existe (el llamador
+// responde 404 para no filtrar la existencia de tratamientos de otros médicos).
+async function getTratamientoPropio(tratId, medicoId) {
+  const { rows } = await pool.query(
+    `SELECT t.*
+       FROM sherlock.tratamientos t
+       JOIN sherlock.pacientes p ON p.id = t.paciente_id
+      WHERE t.id = $1 AND p.medico_id = $2`,
+    [tratId, medicoId]
+  );
+  return rows.length ? rows[0] : null;
+}
+
+// Lista las notas de evolución de un paciente del médico en sesión (404 si no es suyo).
+app.get('/api/pacientes/:id/notas', requireAuth, ensureMedicoId, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de paciente no es válido.' });
+  try {
+    const paciente = await getPacientePropio(id, req.session.user.medico_id);
+    if (!paciente) {
+      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+    }
+    const { rows } = await pool.query(
+      `SELECT * FROM sherlock.notas_evolucion
+        WHERE paciente_id = $1
+        ORDER BY fecha_hora DESC, id DESC`,
+      [id]
+    );
+    await audit(req, 'ver', 'notas', id);
+    res.json(rows);
+  } catch (e) {
+    console.error('[GET /api/pacientes/:id/notas]', e.message);
+    res.status(500).json({ error: 'No se pudieron obtener las notas de evolución.' });
+  }
+});
+
+// Crea una nota de evolución para un paciente del médico en sesión (404 si no es suyo).
+app.post('/api/pacientes/:id/notas', requireAuth, ensureMedicoId, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de paciente no es válido.' });
+  const b = req.body || {};
+  // fecha_hora es opcional; si viene, debe ser una fecha/hora válida (si no, la BD pone now()).
+  let fechaHora = null;
+  if (b.fecha_hora != null && b.fecha_hora !== '') {
+    if (isNaN(new Date(b.fecha_hora).getTime())) {
+      return res.status(400).json({ error: 'El campo "fecha_hora" no es una fecha/hora válida.' });
+    }
+    fechaHora = String(b.fecha_hora);
+  }
+  try {
+    const paciente = await getPacientePropio(id, req.session.user.medico_id);
+    if (!paciente) {
+      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+    }
+    const { rows } = await pool.query(
+      `INSERT INTO sherlock.notas_evolucion
+         (paciente_id, medico_id, fecha_hora, ta, fc, sato2, fr, peso, talla, sintomas, exploracion, evolutivo, plan)
+       VALUES ($1, $2, COALESCE($3::timestamptz, now()), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       RETURNING *`,
+      [
+        id, req.session.user.medico_id, fechaHora,
+        b.ta || null, b.fc || null, b.sato2 || null, b.fr || null, b.peso || null, b.talla || null,
+        b.sintomas || null, b.exploracion || null, b.evolutivo || null, b.plan || null,
+      ]
+    );
+    const nota = rows[0];
+    await audit(req, 'crear', 'nota_evolucion', nota.id);
+    res.status(201).json(nota);
+  } catch (e) {
+    console.error('[POST /api/pacientes/:id/notas]', e.message);
+    res.status(500).json({ error: 'No se pudo crear la nota de evolución.' });
+  }
+});
+
+// Devuelve una nota de evolución, validando que su paciente sea del médico (join).
+app.get('/api/notas/:notaId', requireAuth, ensureMedicoId, async (req, res) => {
+  const notaId = parseInt(req.params.notaId, 10);
+  if (!Number.isInteger(notaId)) return res.status(400).json({ error: 'El id de nota no es válido.' });
+  try {
+    const { rows } = await pool.query(
+      `SELECT n.*
+         FROM sherlock.notas_evolucion n
+         JOIN sherlock.pacientes p ON p.id = n.paciente_id
+        WHERE n.id = $1 AND p.medico_id = $2`,
+      [notaId, req.session.user.medico_id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Nota no encontrada o no pertenece a este médico.' });
+    }
+    await audit(req, 'ver', 'nota_evolucion', notaId);
+    res.json(rows[0]);
+  } catch (e) {
+    console.error('[GET /api/notas/:notaId]', e.message);
+    res.status(500).json({ error: 'No se pudo obtener la nota de evolución.' });
+  }
+});
+
+// Lista los tratamientos de un paciente del médico en sesión, cada uno con su
+// arreglo de ciclos ordenados por fecha (404 si el paciente no es suyo).
+app.get('/api/pacientes/:id/tratamientos', requireAuth, ensureMedicoId, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de paciente no es válido.' });
+  try {
+    const paciente = await getPacientePropio(id, req.session.user.medico_id);
+    if (!paciente) {
+      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+    }
+    const { rows } = await pool.query(
+      `SELECT t.*,
+              COALESCE(
+                (SELECT json_agg(c ORDER BY c.fecha ASC NULLS LAST, c.id ASC)
+                   FROM sherlock.ciclos c
+                  WHERE c.tratamiento_id = t.id),
+                '[]'::json
+              ) AS ciclos
+         FROM sherlock.tratamientos t
+        WHERE t.paciente_id = $1
+        ORDER BY t.creado DESC, t.id DESC`,
+      [id]
+    );
+    await audit(req, 'ver', 'tratamientos', id);
+    res.json(rows);
+  } catch (e) {
+    console.error('[GET /api/pacientes/:id/tratamientos]', e.message);
+    res.status(500).json({ error: 'No se pudieron obtener los tratamientos.' });
+  }
+});
+
+// Crea un tratamiento para un paciente del médico en sesión (404 si no es suyo).
+app.post('/api/pacientes/:id/tratamientos', requireAuth, ensureMedicoId, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de paciente no es válido.' });
+  const b = req.body || {};
+  const nombre = String(b.nombre || '').trim();
+  if (!nombre) return res.status(400).json({ error: 'El nombre del tratamiento es obligatorio.' });
+  const activo = (b.activo == null) ? true : !!b.activo;
+  try {
+    const paciente = await getPacientePropio(id, req.session.user.medico_id);
+    if (!paciente) {
+      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+    }
+    const { rows } = await pool.query(
+      `INSERT INTO sherlock.tratamientos (paciente_id, medico_id, nombre, tipo, activo)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [id, req.session.user.medico_id, nombre, b.tipo || null, activo]
+    );
+    const trat = rows[0];
+    await audit(req, 'crear', 'tratamiento', trat.id, { nombre: trat.nombre });
+    res.status(201).json(trat);
+  } catch (e) {
+    console.error('[POST /api/pacientes/:id/tratamientos]', e.message);
+    res.status(500).json({ error: 'No se pudo crear el tratamiento.' });
+  }
+});
+
+// Agrega un ciclo a un tratamiento cuyo paciente sea del médico en sesión.
+// El dueño se valida con getTratamientoPropio (join tratamiento->paciente->medico).
+app.post('/api/tratamientos/:tratId/ciclos', requireAuth, ensureMedicoId, async (req, res) => {
+  const tratId = parseInt(req.params.tratId, 10);
+  if (!Number.isInteger(tratId)) return res.status(400).json({ error: 'El id de tratamiento no es válido.' });
+  const b = req.body || {};
+  const numero = String(b.numero || '').trim();
+  if (!numero) return res.status(400).json({ error: 'El número del ciclo es obligatorio.' });
+  try {
+    const trat = await getTratamientoPropio(tratId, req.session.user.medico_id);
+    if (!trat) {
+      return res.status(404).json({ error: 'Tratamiento no encontrado o no pertenece a este médico.' });
+    }
+    const { rows } = await pool.query(
+      `INSERT INTO sherlock.ciclos (tratamiento_id, numero, fecha, notas)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [tratId, numero, b.fecha || null, b.notas || null]
+    );
+    const ciclo = rows[0];
+    await audit(req, 'crear', 'ciclo', ciclo.id);
+    res.status(201).json(ciclo);
+  } catch (e) {
+    console.error('[POST /api/tratamientos/:tratId/ciclos]', e.message);
+    res.status(500).json({ error: 'No se pudo agregar el ciclo.' });
+  }
+});
+
+// Elimina un ciclo de un tratamiento cuyo paciente sea del médico en sesión.
+// Primero valida el dueño del tratamiento (join), luego borra el ciclo acotado
+// a ese tratamiento. 404 si el tratamiento no es suyo o el ciclo no existe ahí.
+app.delete('/api/tratamientos/:tratId/ciclos/:cicloId', requireAuth, ensureMedicoId, async (req, res) => {
+  const tratId = parseInt(req.params.tratId, 10);
+  const cicloId = parseInt(req.params.cicloId, 10);
+  if (!Number.isInteger(tratId)) return res.status(400).json({ error: 'El id de tratamiento no es válido.' });
+  if (!Number.isInteger(cicloId)) return res.status(400).json({ error: 'El id de ciclo no es válido.' });
+  try {
+    const trat = await getTratamientoPropio(tratId, req.session.user.medico_id);
+    if (!trat) {
+      return res.status(404).json({ error: 'Tratamiento no encontrado o no pertenece a este médico.' });
+    }
+    const { rowCount } = await pool.query(
+      'DELETE FROM sherlock.ciclos WHERE id = $1 AND tratamiento_id = $2',
+      [cicloId, tratId]
+    );
+    if (!rowCount) {
+      return res.status(404).json({ error: 'Ciclo no encontrado en este tratamiento.' });
+    }
+    await audit(req, 'eliminar', 'ciclo', cicloId);
+    res.json({ ok: true, id: cicloId });
+  } catch (e) {
+    console.error('[DELETE /api/tratamientos/:tratId/ciclos/:cicloId]', e.message);
+    res.status(500).json({ error: 'No se pudo eliminar el ciclo.' });
+  }
+});
+
 // --- API de citas / agenda (todas aisladas por medico_id) ---
 
 // Lista las citas del médico en sesión para un día (por defecto hoy).
