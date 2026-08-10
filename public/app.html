@@ -400,6 +400,8 @@ const S={
   modalTrat:false, tratForm:null, tratGuardando:false, tratError:'',
   modalCiclo:false, cicloForm:null, cicloGuardando:false, cicloError:'',
   antForm:null, antGuardando:false, antMsg:'',
+  // Exploración física / signos vitales actuales (uno por paciente, UPSERT).
+  explForm:null, explGuardando:false, explMsg:'',
   estudForm:null, estudGuardando:false, estudMsg:'', estudAbierto:false,
   npForm:{ nombre:'', sexo:'F', fecha_nacimiento:'', telefono:'', correo:'', seguro:'', dx_resumen:'' },
   stage:{ size:18, skin:false, chest:false, inflam:false, axilar:true, fixed:false, intmam:false, infracl:false, supracl:false, mets:'no', edition:'8' },
@@ -647,6 +649,7 @@ async function cargarExpediente(id, prefill=true){
     S.expediente=data; S.expCargando=false;
     if(prefill){
       prefillAntecedentes(data && data.antecedentes);
+      prefillExploracion(data && data.exploracion);
       if(data && data.diagnostico){ prefillDesdeDiagnostico(data.diagnostico); }
     }
     render();
@@ -798,6 +801,47 @@ async function guardarAntecedentes(){
   }catch(e){
     S.antGuardando=false;
     S.antMsg='No se pudo conectar con el servidor.';
+    render();
+  }
+}
+
+// Siembra S.explForm con la exploración física guardada. Si el paciente aún no
+// tiene una, deja TODO vacío a propósito: un expediente clínico no muestra signos
+// vitales que nadie tomó.
+function prefillExploracion(expl){
+  const e=expl||{};
+  S.explForm={
+    ta_sistolica: e.ta_sistolica||'', ta_diastolica: e.ta_diastolica||'',
+    fc: e.fc||'', fr: e.fr||'', temperatura: e.temperatura||'', sato2: e.sato2||'',
+    peso: e.peso!=null?String(e.peso):'', talla: e.talla!=null?String(e.talla):'',
+    hallazgos: e.hallazgos||'', exploracion_mamaria: e.exploracion_mamaria||'',
+  };
+}
+
+// Persiste la exploración física del paciente real vía PUT (UPSERT).
+async function guardarExploracion(){
+  if(!esNumId(S.patient)) return; // pacientes demo no persisten
+  const f=S.explForm || {};
+  S.explGuardando=true; S.explMsg=''; render();
+  try{
+    const r=await fetch(`/api/pacientes/${S.patient}/exploracion`,{
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body:JSON.stringify(f)
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){
+      S.explGuardando=false;
+      S.explMsg=data.error||'No se pudo guardar la exploración.';
+      render(); return;
+    }
+    // Éxito: recarga el expediente (sin re-sembrar el form, ya está al día) y confirma.
+    await cargarExpediente(S.patient, false);
+    S.explGuardando=false; S.explMsg='Exploración guardada ✓'; render();
+  }catch(e){
+    S.explGuardando=false;
+    S.explMsg='No se pudo conectar con el servidor.';
     render();
   }
 }
@@ -1204,7 +1248,95 @@ function tabHistoria(p){
 }
 
 /* ---- Exploración / signos vitales ---- */
+// Antropometría derivada de peso (kg) y talla (cm) capturados. Devuelve null si
+// falta alguno: sin datos reales no se muestra un cálculo, se muestra un guion.
+function antropometria(f){
+  const w=parseFloat(f&&f.peso), h=parseFloat(f&&f.talla);
+  if(!(Number.isFinite(w)&&w>0&&Number.isFinite(h)&&h>0)) return null;
+  return {
+    mosteller: Math.sqrt((h*w)/3600),
+    dubois: 0.007184*Math.pow(h,0.725)*Math.pow(w,0.425),
+    imc: w/Math.pow(h/100,2),
+  };
+}
+// Clasificación OMS del IMC (antes la tarjeta decía "normal" fijo en el código).
+function claseIMC(v){
+  if(v<18.5) return 'bajo peso';
+  if(v<25)   return 'normal';
+  if(v<30)   return 'sobrepeso';
+  if(v<35)   return 'obesidad grado I';
+  if(v<40)   return 'obesidad grado II';
+  return 'obesidad grado III';
+}
+// Refresco quirúrgico de BSA/IMC al teclear peso o talla: escribe directo en el
+// DOM, sin render(), para no perder el foco del campo (igual que actualizarMotor).
+function actualizarAntropometria(){
+  const a=antropometria(S.explForm);
+  const set=(id,v)=>{const el=document.getElementById(id); if(el) el.textContent=v;};
+  set('expl-bsa',    a?a.mosteller.toFixed(2):'—');
+  set('expl-bsa-du', a?`Du Bois: ${a.dubois.toFixed(2)} m²`:'Du Bois: —');
+  set('expl-imc',    a?a.imc.toFixed(1):'—');
+  set('expl-imc-cls',a?`peso / talla² · ${claseIMC(a.imc)}`:'peso / talla² · captura peso y talla');
+}
+
+// Exploración física del paciente real: signos vitales y hallazgos conectados a
+// la API, con BSA/IMC calculados sobre los datos capturados (no sobre constantes).
+function tabExploracionReal(){
+  const f=S.explForm||{};
+  const a=antropometria(f);
+  const v=(k,l,unit,range)=>`<div class="vital"><div class="vl">${l}</div><div><input class="input" data-expl="${k}" value="${esc(f[k]||'')}" style="text-align:center;padding:7px"></div><div class="vr">${unit} · <span style="color:var(--ok)">${range}</span></div></div>`;
+  // TA en un solo renglón: sistólica/diastólica juntas (dos inputs en la misma fila).
+  const vTA=`<div class="vital"><div class="vl">TA</div><div style="display:flex;align-items:center;gap:6px"><input class="input" data-expl="ta_sistolica" value="${esc(f.ta_sistolica||'')}" style="text-align:center;padding:7px;width:64px"><span style="color:var(--muted)">/</span><input class="input" data-expl="ta_diastolica" value="${esc(f.ta_diastolica||'')}" style="text-align:center;padding:7px;width:64px"></div><div class="vr">mmHg · <span style="color:var(--ok)">sist/diast</span></div></div>`;
+  const ta=(k,label,ph)=>`<div class="field"><label>${label}</label>
+    <textarea class="input" data-expl="${k}" rows="4" style="min-height:96px;resize:vertical" placeholder="${ph}">${esc(f[k]||'')}</textarea></div>`;
+  const ok=/✓/.test(S.explMsg);
+  return `<div class="grid2" style="grid-template-columns:1.25fr .75fr;gap:22px">
+    <div>
+      <div class="card pad" style="margin-bottom:16px">
+        <div class="section-title" style="margin-bottom:6px">Signos vitales</div>
+        <p class="lead" style="font-size:12.5px;margin-bottom:10px">Estado actual del paciente. Se actualizan en cada consulta; el histórico por visita queda en las notas de Evolución.</p>
+        ${v('fc','Frecuencia cardíaca','lpm','20–250')}
+        ${v('fr','Frecuencia respiratoria','rpm','8–40')}
+        ${v('temperatura','Temperatura','°C','35–41')}
+        ${v('sato2','SatO₂','%','30–100')}
+        ${vTA}
+        ${v('peso','Peso','kg','20–200')}
+        ${v('talla','Estatura','cm','20–200')}
+      </div>
+      <div class="card pad">
+        <div class="section-title" style="margin-bottom:12px">Hallazgos</div>
+        ${ta('hallazgos','Exploración física general','Habitus, cabeza y cuello, tórax, abdomen, extremidades…')}
+        ${ta('exploracion_mamaria','Exploración mamaria dirigida','Mamas y regiones ganglionares: localización, tamaño, consistencia, piel, pezón, axilas…')}
+      </div>
+    </div>
+    <div>
+      <div class="calc-card" style="margin-bottom:12px">
+        <div class="cl">Superficie corporal (BSA)</div>
+        <div class="cv"><span id="expl-bsa">${a?a.mosteller.toFixed(2):'—'}</span> <span style="font-size:15px;color:#8FBDBC">m²</span></div>
+        <div class="cf">Mosteller · √(talla×peso/3600)</div>
+        <div class="cf" id="expl-bsa-du">${a?`Du Bois: ${a.dubois.toFixed(2)} m²`:'Du Bois: —'}</div>
+      </div>
+      <div class="calc-card" style="background:linear-gradient(160deg,#9A6A24,#7c5419);margin-bottom:12px">
+        <div class="cl" style="color:#F0DDBE">Índice de masa corporal</div>
+        <div class="cv" id="expl-imc">${a?a.imc.toFixed(1):'—'}</div>
+        <div class="cf" style="color:#F0DDBE" id="expl-imc-cls">${a?`peso / talla² · ${claseIMC(a.imc)}`:'peso / talla² · captura peso y talla'}</div>
+      </div>
+      <div class="note">${ICN.target}<div><b>Dosificación.</b> La BSA alimenta el cálculo de dosis de quimioterapia; para carboplatino se integrará la fórmula de Calvert (AUC × [TFG + 25]).</div></div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;justify-content:flex-end;gap:14px;margin-top:18px">
+    ${S.explMsg?`<span style="font-size:13px;color:${ok?'var(--ok)':'#A23A3A'}">${esc(S.explMsg)}</span>`:''}
+    <button class="btn btn-primary" data-guardar-expl ${S.explGuardando?'disabled':''}>${S.explGuardando?'Guardando…':`${ICN.check} Confirmar y registrar`}</button>
+  </div>`;
+}
+
 function tabExploracion(p){
+  // Paciente real (id numérico): formulario editable conectado a la API.
+  const num=esNumId(S.patient);
+  const real=(num && S.expediente && S.expediente.paciente && String(S.expediente.paciente.id)===String(S.patient));
+  if(real) return tabExploracionReal();
+  if(num) return `<div class="card pad"><p class="lead" style="margin:0">Cargando expediente…</p></div>`;
+  // Paciente demo: contenido ilustrativo original (sin API).
   const w=72, h=162; // kg, cm
   const bsaMost=Math.sqrt((h*w)/3600);
   const bsaDu=0.007184*Math.pow(h,0.725)*Math.pow(w,0.425);
@@ -1957,6 +2089,16 @@ function bind(){
   // Antecedentes (expediente real): captura sin perder foco + guardar.
   document.querySelectorAll('[data-ant]').forEach(el=>el.oninput=()=>{if(!S.antForm)S.antForm={};S.antForm[el.getAttribute('data-ant')]=el.value;});
   document.querySelectorAll('[data-guardar-ant]').forEach(el=>el.onclick=()=>guardarAntecedentes());
+
+  // Exploración física (expediente real): captura sin perder foco + guardar.
+  // Peso y talla recalculan BSA/IMC en caliente, sin render() (conserva el foco).
+  document.querySelectorAll('[data-expl]').forEach(el=>el.oninput=el.onchange=()=>{
+    if(!S.explForm)S.explForm={};
+    const k=el.getAttribute('data-expl');
+    S.explForm[k]=el.value;
+    if(k==='peso'||k==='talla') actualizarAntropometria();
+  });
+  document.querySelectorAll('[data-guardar-expl]').forEach(el=>el.onclick=()=>guardarExploracion());
 
   // Estudios (expediente real): captura sin perder foco + abrir/cerrar/guardar.
   document.querySelectorAll('[data-estud]').forEach(el=>el.oninput=el.onchange=()=>{if(!S.estudForm)S.estudForm={};S.estudForm[el.getAttribute('data-estud')]=el.value;});

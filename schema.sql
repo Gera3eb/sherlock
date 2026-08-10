@@ -98,6 +98,29 @@ CREATE TABLE IF NOT EXISTS sherlock.notas_evolucion (
   creado       timestamptz DEFAULT now()
 );
 
+-- Exploración física / signos vitales ACTUALES del paciente (una fila por paciente).
+-- El histórico por visita vive en notas_evolucion; aquí está el estado vigente, que
+-- es el que alimenta el cálculo de superficie corporal (dosificación) e IMC.
+-- peso y talla son NUMERIC porque de ellos se calcula; el resto es TEXTO porque así
+-- lo captura el médico (TA "128/82") y ningún cálculo lo consume.
+CREATE TABLE IF NOT EXISTS sherlock.exploracion (
+  id                    serial PRIMARY KEY,
+  paciente_id           int UNIQUE REFERENCES sherlock.pacientes(id),
+  medico_id             int,
+  fecha                 timestamptz DEFAULT now(),
+  ta_sistolica          text,
+  ta_diastolica         text,
+  fc                    text,
+  fr                    text,
+  temperatura           text,
+  sato2                 text,
+  peso                  numeric,
+  talla                 numeric,
+  hallazgos             text,
+  exploracion_mamaria   text,
+  creado                timestamptz DEFAULT now()
+);
+
 -- Tratamientos (esquemas terapéuticos) del paciente.
 CREATE TABLE IF NOT EXISTS sherlock.tratamientos (
   id           serial PRIMARY KEY,
@@ -140,3 +163,4 @@ CREATE INDEX IF NOT EXISTS idx_pacientes_medico  ON sherlock.pacientes (medico_i
 CREATE INDEX IF NOT EXISTS idx_notas_paciente        ON sherlock.notas_evolucion (paciente_id);
 CREATE INDEX IF NOT EXISTS idx_tratamientos_paciente ON sherlock.tratamientos (paciente_id);
 CREATE INDEX IF NOT EXISTS idx_ciclos_tratamiento    ON sherlock.ciclos (tratamiento_id);
+CREATE INDEX IF NOT EXISTS idx_exploracion_paciente  ON sherlock.exploracion (paciente_id);

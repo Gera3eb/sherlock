@@ -190,10 +190,11 @@ app.get('/api/pacientes/:id/expediente', requireAuth, ensureMedicoId, async (req
     if (!paciente) {
       return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
     }
-    const [ant, est, dx] = await Promise.all([
+    const [ant, est, dx, expl] = await Promise.all([
       pool.query('SELECT * FROM sherlock.antecedentes WHERE paciente_id = $1', [id]),
       pool.query('SELECT * FROM sherlock.estudios WHERE paciente_id = $1 ORDER BY fecha DESC, id DESC', [id]),
       pool.query('SELECT * FROM sherlock.diagnosticos WHERE paciente_id = $1 ORDER BY creado DESC LIMIT 1', [id]),
+      pool.query('SELECT * FROM sherlock.exploracion WHERE paciente_id = $1', [id]),
     ]);
     await audit(req, 'ver', 'expediente', id);
     res.json({
@@ -201,6 +202,7 @@ app.get('/api/pacientes/:id/expediente', requireAuth, ensureMedicoId, async (req
       antecedentes: ant.rows.length ? ant.rows[0] : null,
       estudios: est.rows,
       diagnostico: dx.rows.length ? dx.rows[0] : null,
+      exploracion: expl.rows.length ? expl.rows[0] : null,
     });
   } catch (e) {
     console.error('[GET /api/pacientes/:id/expediente]', e.message);
@@ -233,6 +235,70 @@ app.put('/api/pacientes/:id/antecedentes', requireAuth, ensureMedicoId, async (r
   } catch (e) {
     console.error('[PUT /api/pacientes/:id/antecedentes]', e.message);
     res.status(500).json({ error: 'No se pudieron guardar los antecedentes.' });
+  }
+});
+
+// Normaliza un campo antropométrico (peso/talla) a número o null.
+// Vacío/ausente => null (el médico aún no lo captura, no se inventa un valor).
+// Fuera de rango plausible => undefined, que el llamador traduce en un 400: más
+// vale rechazar un dedazo que calcular una dosis sobre una superficie corporal
+// imposible. El rango es amplio a propósito (incluye pediátricos).
+function numAntropo(v, min, max) {
+  if (v == null || String(v).trim() === '') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < min || n > max) return undefined;
+  return n;
+}
+
+// Guarda (UPSERT) la exploración física / signos vitales ACTUALES del paciente.
+// Uno por paciente: cada consulta actualiza el mismo registro (el histórico por
+// visita vive en notas_evolucion).
+app.put('/api/pacientes/:id/exploracion', requireAuth, ensureMedicoId, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de paciente no es válido.' });
+  const b = req.body || {};
+  const peso = numAntropo(b.peso, 1, 400);
+  if (peso === undefined) return res.status(400).json({ error: 'El peso debe ser un número entre 1 y 400 kg.' });
+  const talla = numAntropo(b.talla, 30, 250);
+  if (talla === undefined) return res.status(400).json({ error: 'La estatura debe ser un número entre 30 y 250 cm.' });
+  // Signos vitales de texto: se guardan tal cual los captura el médico.
+  const txt = (v) => (v == null || String(v).trim() === '' ? null : String(v).trim());
+  try {
+    const paciente = await getPacientePropio(id, req.session.user.medico_id);
+    if (!paciente) {
+      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+    }
+    const { rows } = await pool.query(
+      `INSERT INTO sherlock.exploracion
+         (paciente_id, medico_id, fecha, ta_sistolica, ta_diastolica, fc, fr,
+          temperatura, sato2, peso, talla, hallazgos, exploracion_mamaria)
+       VALUES ($1, $2, now(), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       ON CONFLICT (paciente_id) DO UPDATE SET
+         medico_id           = EXCLUDED.medico_id,
+         fecha               = EXCLUDED.fecha,
+         ta_sistolica        = EXCLUDED.ta_sistolica,
+         ta_diastolica       = EXCLUDED.ta_diastolica,
+         fc                  = EXCLUDED.fc,
+         fr                  = EXCLUDED.fr,
+         temperatura         = EXCLUDED.temperatura,
+         sato2               = EXCLUDED.sato2,
+         peso                = EXCLUDED.peso,
+         talla               = EXCLUDED.talla,
+         hallazgos           = EXCLUDED.hallazgos,
+         exploracion_mamaria = EXCLUDED.exploracion_mamaria
+       RETURNING *`,
+      [
+        id, req.session.user.medico_id,
+        txt(b.ta_sistolica), txt(b.ta_diastolica), txt(b.fc), txt(b.fr),
+        txt(b.temperatura), txt(b.sato2), peso, talla,
+        txt(b.hallazgos), txt(b.exploracion_mamaria),
+      ]
+    );
+    await audit(req, 'guardar', 'exploracion', id, { peso, talla });
+    res.json(rows[0]);
+  } catch (e) {
+    console.error('[PUT /api/pacientes/:id/exploracion]', e.message);
+    res.status(500).json({ error: 'No se pudo guardar la exploración física.' });
   }
 });
 
