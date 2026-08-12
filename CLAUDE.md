@@ -57,9 +57,19 @@ UPDATE/DELETE sobre ella).
 
 Aplicar esquema y sembrar:
 ```
-node migrate.js    # crea/actualiza tablas (idempotente)
+node migrate.js    # ejecuta schema.sql (idempotente)
 node seed.js       # médicos siempre; pacientes/citas solo si la tabla está vacía
 ```
+
+> **Cuidado: `migrate.js` NO aplica `migrations/`.** Solo ejecuta `schema.sql`, y como sus
+> `CREATE TABLE` son `IF NOT EXISTS`, sobre una base que ya existe **no agrega columnas
+> nuevas** — imprime "Esquema OK" y deja el esquema viejo. `schema.sql` sirve para una base
+> desde cero; `migrations/` es lo que actualiza dev y prod. Hay que correrlas a mano, en
+> orden, tras cada despliegue que traiga migraciones nuevas:
+> ```
+> for m in migrations/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$m"; done
+> ```
+> Todas son idempotentes (`IF NOT EXISTS`), así que re-ejecutarlas es inofensivo.
 
 ## Rutas
 Públicas: `GET /login` · `POST /login` (valida contra `USERS` del `.env`) · `GET /logout` ·
@@ -107,8 +117,9 @@ expediente, con impresión nativa vía `@media print`). Cada operación deja reg
 ### Exploración física y notas de evolución
 Los signos vitales tienen **un solo camino de escritura**: el modal de nota de evolución
 (`POST /api/pacientes/:id/notas`). Exploración es una vista de **solo lectura** sobre la
-nota más reciente — muestra esos vitales y calcula BSA (Mosteller y Du Bois) e IMC a partir
-del peso y talla reales — y su botón "Registrar nueva medición" reusa ese mismo modal.
+visita más reciente, en su versión vigente (ver "Corrección de notas") — muestra esos
+vitales y calcula BSA (Mosteller y Du Bois) e IMC a partir del peso y talla reales — y su
+botón "Registrar nueva medición" reusa ese mismo modal.
 No agregar un segundo formulario de captura de vitales: dos caminos de escritura sobre
 `notas_evolucion` producen dos versiones de la misma consulta.
 
@@ -147,6 +158,9 @@ topbar y con él el input, así que se perdería el foco en cada tecla. El panel
 solo, sobre `#q-panel` (ver `pintarPanel()`).
 
 ## Pendientes conocidos
+- **`migrate.js` no corre `migrations/`** (ver aviso arriba). Es un pie de banco: quien
+  despliegue puede leer "Esquema OK" y creer que la base quedó al día. Conviene que
+  `migrate.js` las aplique en orden y lleve registro de cuáles ya se aplicaron.
 - **Modo Asistente · iPad**: maqueta, no persiste. El toggle Médico/Asistente es visual;
   no existe rol `asistente` real ni permisos diferenciados.
 - **Paciente demo `'sara'`** sigue en el front con id de texto y sostiene un camino de
