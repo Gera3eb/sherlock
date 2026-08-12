@@ -54,9 +54,15 @@ a{color:var(--petrol);text-decoration:none}
 
 .main{display:flex;flex-direction:column;min-width:0}
 .topbar{height:62px;background:rgba(255,255,255,.86);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:16px;padding:0 26px;position:sticky;top:0;z-index:30}
-.searchbox{flex:1;max-width:380px;display:flex;align-items:center;gap:9px;background:var(--mist);border:1px solid var(--line);border-radius:11px;padding:8.5px 13px;color:var(--muted)}
+.searchbox{position:relative;flex:1;max-width:380px;display:flex;align-items:center;gap:9px;background:var(--mist);border:1px solid var(--line);border-radius:11px;padding:8.5px 13px;color:var(--muted)}
 .searchbox svg{width:15px;height:15px}
 .searchbox input{border:none;background:none;outline:none;flex:1;color:var(--ink)}
+/* Panel de resultados del buscador: cuelga del searchbox, por encima del topbar. */
+#q-panel{position:absolute;top:calc(100% + 7px);left:0;right:0;background:var(--paper);border:1px solid var(--line);border-radius:11px;box-shadow:var(--sh-2);z-index:60;max-height:min(60vh,420px);overflow:auto;padding:6px}
+.q-grp{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--slate);padding:9px 15px 4px}
+.q-row{display:block;width:100%;text-align:left;background:none;border:none;font:inherit;cursor:pointer;padding:9px 15px;border-radius:8px}
+.q-row:hover{background:var(--mist)}
+.q-msg{padding:13px 15px;color:var(--muted);font-size:12.5px}
 .role-toggle{display:flex;background:var(--mist);border:1px solid var(--line);border-radius:10px;padding:3px}
 .role-toggle button{padding:6px 13px;border-radius:7px;font-size:12.5px;font-weight:600;color:var(--slate)}
 .role-toggle button.on{background:#fff;color:var(--petrol);box-shadow:var(--sh-1)}
@@ -379,6 +385,9 @@ if(__USER__ && __USER__.role && DOCTORS[__USER__.role]){
 const S={
   route:'agenda', doc:(__USER__&&__USER__.role&&DOCTORS[__USER__.role])?__USER__.role:'soto', role:'medico', patient:'sara', tab:'historia',
   ipadStep:0,
+  // --- Buscador global (API real) ---
+  // q vive fuera del ciclo de render: el panel se repinta solo (ver pintarPanel).
+  q:'', qRes:null, qCargando:false, qAbierto:false,
   // --- Agenda / citas (API real) ---
   // agendaVista: rubro mostrado en la agenda ('consultas' por defecto | 'quimio').
   citas:[], citasCargadas:false, citasFecha:hoyISO(), agendaVista:'consultas',
@@ -445,7 +454,8 @@ function shell(content){
     </aside>
     <main class="main">
       <div class="topbar">
-        <div class="searchbox">${ICN.glass}<input placeholder="Buscar paciente, diagnóstico o estudio…"></div>
+        <div class="searchbox">${ICN.glass}<input data-q value="${esc(S.q)}" placeholder="Buscar paciente, diagnóstico o estudio…" autocomplete="off" spellcheck="false">
+          <div id="q-panel" style="display:none"></div></div>
         <div style="flex:1"></div>
         <div class="role-toggle">
           <button class="${S.role==='medico'?'on':''}" data-role="medico">Médico</button>
@@ -675,6 +685,82 @@ async function cargarTratamientos(id){
     S.tratamientos = r.ok ? await r.json() : [];
   }catch(e){ S.tratamientos=[]; }
   S.tratamientosCargando=false; S.tratamientosCargados=true; render();
+}
+
+/* ---------------- BUSCADOR GLOBAL ---------------- */
+// Es el único punto de la app que NO pasa por render(): un re-render reconstruye
+// el topbar y con él el input, así que se perdería el foco y el cursor en cada
+// tecla. Por eso el panel de resultados se pinta a mano sobre #q-panel.
+let qTimer=null;
+
+function pintarPanel(){
+  const el=document.getElementById('q-panel');
+  if(!el) return;
+  el.style.display = S.qAbierto ? 'block' : 'none';
+  el.innerHTML = S.qAbierto ? panelBusqueda() : '';
+  // Los resultados nacen fuera de bind(), así que se enlazan aquí mismo.
+  el.querySelectorAll('[data-qgo]').forEach(b=>b.onclick=()=>
+    irAResultado(b.getAttribute('data-qgo'), b.getAttribute('data-qtab')));
+}
+
+// Resultados agrupados; cada renglón abre el expediente en la pestaña que le toca.
+function panelBusqueda(){
+  if(S.qCargando) return `<div class="q-msg">Buscando…</div>`;
+  const r=S.qRes;
+  if(!r) return '';
+  const pac=r.pacientes||[], dx=r.diagnosticos||[], est=r.estudios||[];
+  if(!pac.length && !dx.length && !est.length)
+    return `<div class="q-msg">Sin resultados para “${esc(S.q.trim())}”.</div>`;
+
+  const fila=(pid,tab,titulo,sub)=>`<button class="q-row" data-qgo="${esc(pid)}" data-qtab="${tab}">
+    <div style="font-size:13px;color:var(--ink);font-weight:600">${titulo}</div>
+    ${sub?`<div style="font-size:11.5px;color:var(--muted);margin-top:2px">${sub}</div>`:''}</button>`;
+  const grupo=(titulo,filas)=> filas.length ? `<div class="q-grp">${titulo}</div>${filas.join('')}` : '';
+
+  return grupo('Pacientes', pac.map(p =>
+      fila(p.id, 'historia', esc(p.nombre||'—'), esc(p.dx_resumen||''))))
+    + grupo('Diagnósticos', dx.map(d => {
+        const t=[d.tipo_histologico,d.subtipo].filter(Boolean).join(' · ')||'Diagnóstico';
+        const e=d.etapa?` · Etapa ${esc(d.etapa)}`:'';
+        return fila(d.paciente_id, 'diagnostico', esc(t)+e, esc(d.paciente||''));
+      }))
+    + grupo('Estudios', est.map(s => {
+        const f=fechaDMY(s.fecha);
+        const sub=[s.paciente, f!=='—'?f:null].filter(Boolean).join(' · ');
+        return fila(s.paciente_id, 'estudios', esc(s.descripcion||s.categoria||'Estudio'), esc(sub));
+      }));
+}
+
+function irAResultado(pid, tab){
+  S.patient=String(pid); S.tab=tab||'historia';
+  S.q=''; S.qRes=null; S.qAbierto=false; S.qCargando=false;
+  if(qTimer){ clearTimeout(qTimer); qTimer=null; }
+  go('paciente');   // render completo: el buscador queda limpio y el expediente abierto
+}
+
+// Cada tecla reprograma la consulta (250 ms) en vez de disparar una por letra.
+function alTeclearBusqueda(v){
+  S.q=v;
+  if(qTimer) clearTimeout(qTimer);
+  const q=v.trim();
+  if(q.length<2){ S.qRes=null; S.qCargando=false; S.qAbierto=false; pintarPanel(); return; }
+  S.qAbierto=true; S.qCargando=true; pintarPanel();
+  qTimer=setTimeout(()=>buscar(q), 250);
+}
+
+async function buscar(q){
+  const vacio={pacientes:[],diagnosticos:[],estudios:[]};
+  try{
+    const r=await fetch(`/api/buscar?q=${encodeURIComponent(q)}`,{credentials:'same-origin'});
+    // Respuesta rezagada: si el texto ya cambió, otra consulta viene en camino y
+    // pintar ésta haría parpadear resultados que ya no corresponden a lo tecleado.
+    if(S.q.trim()!==q) return;
+    S.qRes = r.ok ? await r.json() : vacio;
+  }catch(e){
+    if(S.q.trim()!==q) return;
+    S.qRes=vacio;
+  }
+  S.qCargando=false; pintarPanel();
 }
 
 // Siembra S.stage / S.bio con el último diagnóstico guardado, para que el motor
@@ -1269,7 +1355,7 @@ function tabExploracionReal(){
     return `<div class="vital">
       <div class="vl">${label}</div>
       <div style="text-align:center;font-weight:600;font-size:14.5px;color:${hay?'var(--ink)':'var(--muted)'}">${hay?esc(val):'—'}</div>
-      <div class="vr">${unidad} · <span style="color:var(--ok)">${rango}</span></div></div>`;
+      <div class="vr">${unidad}${rango?` · <span style="color:var(--ok)">${rango}</span>`:''}</div></div>`;
   };
 
   // Tarjeta de reemplazo cuando falta el dato de origen: se dice qué falta en vez
@@ -2094,7 +2180,24 @@ function bind(){
 
   // Informe médico: impresión nativa del navegador (solo el documento, vía @media print).
   document.querySelectorAll('[data-print]').forEach(el=>el.onclick=()=>window.print());
+
+  // Buscador global: sin render() al teclear, para no perder el foco (ver pintarPanel).
+  const qIn=document.querySelector('[data-q]');
+  if(qIn){
+    qIn.oninput=()=>alTeclearBusqueda(qIn.value);
+    qIn.onfocus=()=>{ if(S.qRes && (S.q||'').trim().length>=2){ S.qAbierto=true; pintarPanel(); } };
+    qIn.onkeydown=(e)=>{ if(e.key==='Escape'){ S.qAbierto=false; pintarPanel(); qIn.blur(); } };
+  }
+  pintarPanel(); // el panel se recrea vacío en cada render: restaura su estado
 }
+
+// Clic fuera del buscador: cierra el panel. Se registra UNA sola vez — bind() corre
+// en cada render y aquí duplicaría el listener en cada navegación.
+document.addEventListener('mousedown', (e)=>{
+  if(!S.qAbierto) return;
+  if(e.target.closest && e.target.closest('.searchbox')) return;
+  S.qAbierto=false; pintarPanel();
+});
 
 render();
 </script>

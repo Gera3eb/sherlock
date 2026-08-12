@@ -75,6 +75,7 @@ Protegidas (`requireAuth`); las de datos además pasan por `ensureMedicoId` y fi
   `GET|POST /api/pacientes/:id/tratamientos` · `POST /api/tratamientos/:tratId/ciclos` ·
   `DELETE /api/tratamientos/:tratId/ciclos/:cicloId`
 - Agenda: `GET|POST /api/citas` · `DELETE /api/citas/:id`
+- Búsqueda: `GET /api/buscar?q=` (pacientes, diagnósticos y estudios; mínimo 2 caracteres)
 
 ## .env (cada servidor el suyo, nunca en el repo)
 Ver `.env.example` para el formato completo. Variables: `PORT`, `COOKIE_SECURE`,
@@ -114,8 +115,20 @@ Peso y talla se guardan como texto libre; `numDeTexto()` y `tallaACm()` los inte
 (la talla se asume en metros por debajo de 3, en cm por encima). Si falta peso o talla, las
 calculadoras **dicen qué falta** en vez de calcular sobre un supuesto.
 
+### Buscador global
+`GET /api/buscar` busca en pacientes, diagnósticos y estudios, todo acotado por `medico_id`
+(diagnósticos y estudios lo alcanzan por JOIN a pacientes). Dos cosas que no hay que perder
+al tocarlo:
+- **Sin acentos en los dos lados.** El patrón se normaliza en JS con NFD y la columna en SQL
+  con `translate()`; los dos mapeos deben coincidir o la búsqueda deja de encontrar. Se evitó
+  la extensión `unaccent` para no tener que crearla en cada base antes de desplegar.
+- **Los comodines de LIKE se escapan**, para que `%` y `_` se busquen como texto literal.
+
+En el front es el único punto que **no pasa por `render()`**: un re-render reconstruye el
+topbar y con él el input, así que se perdería el foco en cada tecla. El panel se repinta
+solo, sobre `#q-panel` (ver `pintarPanel()`).
+
 ## Pendientes conocidos
-- **Buscador global** de la topbar: decorativo, sin binding.
 - **Modo Asistente · iPad**: maqueta, no persiste. El toggle Médico/Asistente es visual;
   no existe rol `asistente` real ni permisos diferenciados.
 - **Paciente demo `'sara'`** sigue en el front con id de texto y sostiene un camino de
@@ -129,6 +142,11 @@ calculadoras **dicen qué falta** en vez de calcular sobre un supuesto.
   `ssl.rejectUnauthorized:false` en `src/db.js`.
 - La vista **Seguridad** describe objetivos de diseño (cifrado en reposo, marca de agua,
   respaldo cifrado), no funcionalidad entregada. Cuidar cómo se presenta al cliente.
+- La **Agenda** muestra un chip "Conectado a Google Calendar", una tarjeta de "Auto-agenda
+  del paciente" con botón de pre-registro, y una nota que afirma que cada cita sincroniza y
+  dispara correo de confirmación. **No existe nada de eso**: no hay integración con Google
+  ni envío de correo en el servidor. A diferencia de la vista Seguridad, aquí está redactado
+  como un hecho ("Conectado a"), así que un médico lo va a leer como entregado.
 
 ## Notas
 - `app.set('trust proxy',1)` ya está (va detrás de Nginx). Cookie `secure` con `COOKIE_SECURE=1`.

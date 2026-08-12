@@ -613,6 +613,82 @@ app.delete('/api/citas/:id', requireAuth, ensureMedicoId, async (req, res) => {
   }
 });
 
+// Quita acentos de un texto en JS (lado del patrón de búsqueda).
+function sinAcentos(s) {
+  return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+// Equivalente en SQL (lado de la columna). Los dos mapeos deben coincidir: las
+// vocales acentuadas van a su vocal simple y la ñ a n, igual que hace NFD.
+const ACENTUADAS = 'áéíóúüñÁÉÍÓÚÜÑ';
+const LLANAS     = 'aeiouunAEIOUUN';
+const sqlSinAcentos = (col) => `translate(${col}, '${ACENTUADAS}', '${LLANAS}')`;
+
+// Búsqueda global del médico en sesión: pacientes, diagnósticos y estudios.
+// El aislamiento se mantiene igual que en el resto de la API: pacientes filtra por
+// medico_id, y diagnósticos y estudios lo alcanzan por JOIN a pacientes, así que
+// un médico nunca ve resultados de otro.
+app.get('/api/buscar', requireAuth, ensureMedicoId, async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const vacio = { pacientes: [], diagnosticos: [], estudios: [] };
+  // Con una sola letra la búsqueda devuelve medio expediente: no vale la pena.
+  if (q.length < 2) return res.json(vacio);
+
+  // Búsqueda sin acentos: nadie teclea "Méndez" ni "mastografía" con acento en un
+  // buscador, y sin esto no encontraban nada. Se normalizan los DOS lados —el
+  // patrón aquí y la columna en SQL con translate()— en lugar de usar la extensión
+  // unaccent, que obligaría a crearla en cada base (dev y prod) antes de desplegar.
+  // NFD descompone la vocal acentuada y el filtro quita la tilde suelta; la ñ pasa
+  // a n por el mismo camino, así que "munoz" encuentra "Muñoz".
+  const patron = '%' + sinAcentos(q).replace(/([\\%_])/g, '\\$1') + '%';
+  const medicoId = req.session.user.medico_id;
+  const LIMITE = 8; // por grupo: el panel es un atajo, no un listado
+
+  try {
+    const [pac, dx, est] = await Promise.all([
+      pool.query(
+        `SELECT id, nombre, dx_resumen
+           FROM sherlock.pacientes
+          WHERE medico_id = $1
+            AND (${sqlSinAcentos('nombre')} ILIKE $2 OR ${sqlSinAcentos('dx_resumen')} ILIKE $2)
+          ORDER BY nombre
+          LIMIT $3`,
+        [medicoId, patron, LIMITE]
+      ),
+      pool.query(
+        `SELECT d.id, d.paciente_id, p.nombre AS paciente,
+                d.tipo_histologico, d.subtipo, d.etapa, d.fecha
+           FROM sherlock.diagnosticos d
+           JOIN sherlock.pacientes p ON p.id = d.paciente_id
+          WHERE p.medico_id = $1
+            AND (${sqlSinAcentos('d.tipo_histologico')} ILIKE $2
+              OR ${sqlSinAcentos('d.subtipo')} ILIKE $2
+              OR ${sqlSinAcentos('d.etapa')} ILIKE $2)
+          ORDER BY d.fecha DESC NULLS LAST, d.id DESC
+          LIMIT $3`,
+        [medicoId, patron, LIMITE]
+      ),
+      pool.query(
+        `SELECT e.id, e.paciente_id, p.nombre AS paciente,
+                e.categoria, e.fecha, e.descripcion
+           FROM sherlock.estudios e
+           JOIN sherlock.pacientes p ON p.id = e.paciente_id
+          WHERE p.medico_id = $1
+            AND (${sqlSinAcentos('e.descripcion')} ILIKE $2 OR ${sqlSinAcentos('e.categoria')} ILIKE $2)
+          ORDER BY e.fecha DESC NULLS LAST, e.id DESC
+          LIMIT $3`,
+        [medicoId, patron, LIMITE]
+      ),
+    ]);
+
+    // Queda en bitácora qué se buscó: es acceso a datos del expediente (NOM-004).
+    await audit(req, 'buscar', 'global', null, { q });
+    res.json({ pacientes: pac.rows, diagnosticos: dx.rows, estudios: est.rows });
+  } catch (e) {
+    console.error('[GET /api/buscar]', e.message);
+    res.status(500).json({ error: 'No se pudo completar la búsqueda.' });
+  }
+});
+
 // SPA protegida — inyecta la identidad del usuario en el HTML
 app.get('/', requireAuth, (req, res) => {
   let html = fs.readFileSync(path.join(PUBLIC, 'app.html'), 'utf8');
