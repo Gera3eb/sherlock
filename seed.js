@@ -5,6 +5,10 @@
  * - Siembra pacientes y citas de ejemplo SOLO si la tabla pacientes está vacía,
  *   para no duplicar al re-ejecutar.
  *
+ * IMPORTANTE: todas las queries califican el schema (sherlock.<tabla>), igual que
+ * server.js. El endpoint de Neon es el pooler y no conserva `search_path` entre
+ * transacciones — ver la nota larga en src/db.js.
+ *
  * Uso:  node seed.js
  */
 'use strict';
@@ -24,7 +28,7 @@ const PACIENTES = [
 ];
 
 async function medicoIdPorUsername(username) {
-  const { rows } = await pool.query('SELECT id FROM medicos WHERE username = $1', [username]);
+  const { rows } = await pool.query('SELECT id FROM sherlock.medicos WHERE username = $1', [username]);
   return rows.length ? rows[0].id : null;
 }
 
@@ -32,7 +36,7 @@ async function main() {
   // 1) Médicos (idempotente)
   for (const m of MEDICOS) {
     await pool.query(
-      `INSERT INTO medicos (username, nombre, especialidad, rol)
+      `INSERT INTO sherlock.medicos (username, nombre, especialidad, rol)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (username) DO NOTHING`,
       [m.username, m.nombre, m.especialidad, m.rol]
@@ -40,13 +44,13 @@ async function main() {
   }
 
   // 2) Pacientes + citas: SOLO si no hay pacientes (evita duplicados al re-correr)
-  const { rows: cnt } = await pool.query('SELECT COUNT(*)::int AS n FROM pacientes');
+  const { rows: cnt } = await pool.query('SELECT COUNT(*)::int AS n FROM sherlock.pacientes');
   if (cnt[0].n === 0) {
     const idsPorNombre = {};
     for (const p of PACIENTES) {
       const medicoId = await medicoIdPorUsername(p.medico);
       const { rows } = await pool.query(
-        `INSERT INTO pacientes (medico_id, nombre, sexo, fecha_nacimiento, telefono, correo, seguro, dx_resumen)
+        `INSERT INTO sherlock.pacientes (medico_id, nombre, sexo, fecha_nacimiento, telefono, correo, seguro, dx_resumen)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING id`,
         [medicoId, p.nombre, p.sexo, p.fecha_nacimiento, p.telefono, p.correo, p.seguro, p.dx_resumen]
@@ -58,12 +62,14 @@ async function main() {
     const citas = [
       { paciente: 'Sara Méndez Rojas',  hora: 9,  titulo: 'Revisión postoperatoria', tipo: 'consulta' },
       { paciente: 'Mónika Brunger',     hora: 11, titulo: 'Valoración oncológica',    tipo: 'consulta' },
-      { paciente: 'Héctor Barri Pérez', hora: 13, titulo: 'Seguimiento de quimioterapia', tipo: 'seguimiento' },
+      // Tipo 'quimio' para que la agenda sembrada ejercite ambos rubros
+      // (Consultas / Quimioterapia), no solo el de consultas.
+      { paciente: 'Héctor Barri Pérez', hora: 13, titulo: 'Seguimiento de quimioterapia', tipo: 'quimio' },
     ];
     for (const c of citas) {
       const pac = idsPorNombre[c.paciente];
       await pool.query(
-        `INSERT INTO citas (medico_id, paciente_id, inicio, titulo, tipo)
+        `INSERT INTO sherlock.citas (medico_id, paciente_id, inicio, titulo, tipo)
          VALUES ($1, $2, current_date + ($3 || ' hours')::interval, $4, $5)`,
         [pac.medico_id, pac.id, c.hora, c.titulo, c.tipo]
       );
@@ -76,9 +82,9 @@ async function main() {
   // 4) Resumen
   const { rows: r } = await pool.query(
     `SELECT
-       (SELECT COUNT(*)::int FROM medicos)   AS medicos,
-       (SELECT COUNT(*)::int FROM pacientes) AS pacientes,
-       (SELECT COUNT(*)::int FROM citas)     AS citas`
+       (SELECT COUNT(*)::int FROM sherlock.medicos)   AS medicos,
+       (SELECT COUNT(*)::int FROM sherlock.pacientes) AS pacientes,
+       (SELECT COUNT(*)::int FROM sherlock.citas)     AS citas`
   );
   console.log('Resumen:', r[0]);
 }
