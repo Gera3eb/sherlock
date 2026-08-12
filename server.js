@@ -405,6 +405,77 @@ app.get('/api/notas/:notaId', requireAuth, ensureMedicoId, async (req, res) => {
   }
 });
 
+// Corrige una nota de evolución SIN alterarla: inserta una nota nueva que apunta
+// a la original (corrige_a). La original se conserva intacta y legible — el
+// expediente clínico no se sobrescribe (NOM-004), se le agrega el addendum.
+app.post('/api/notas/:notaId/correccion', requireAuth, ensureMedicoId, async (req, res) => {
+  const notaId = parseInt(req.params.notaId, 10);
+  if (!Number.isInteger(notaId)) return res.status(400).json({ error: 'El id de nota no es válido.' });
+
+  const b = req.body || {};
+  // Una corrección sin motivo no es auditable: es el dato que explica el cambio.
+  const motivo = String(b.motivo_correccion || '').trim();
+  if (!motivo) return res.status(400).json({ error: 'El motivo de la corrección es obligatorio.' });
+
+  let fechaHora = null;
+  if (b.fecha_hora != null && b.fecha_hora !== '') {
+    if (isNaN(new Date(b.fecha_hora).getTime())) {
+      return res.status(400).json({ error: 'El campo "fecha_hora" no es una fecha/hora válida.' });
+    }
+    fechaHora = String(b.fecha_hora);
+  }
+
+  try {
+    // El JOIN con pacientes es lo que impide corregir la nota de otro médico.
+    const { rows: orig } = await pool.query(
+      `SELECT n.id, n.paciente_id, n.fecha_hora, n.corrige_a
+         FROM sherlock.notas_evolucion n
+         JOIN sherlock.pacientes p ON p.id = n.paciente_id
+        WHERE n.id = $1 AND p.medico_id = $2`,
+      [notaId, req.session.user.medico_id]
+    );
+    if (!orig.length) {
+      return res.status(404).json({ error: 'Nota no encontrada o no pertenece a este médico.' });
+    }
+    // Modelo plano: sin cadenas de correcciones de correcciones (ver migración 006).
+    if (orig[0].corrige_a != null) {
+      return res.status(400).json({
+        error: 'Esa nota ya es una corrección. Corrige la nota original para agregar otra.',
+        nota_original: orig[0].corrige_a,
+      });
+    }
+
+    const o = orig[0];
+    const { rows } = await pool.query(
+      `INSERT INTO sherlock.notas_evolucion
+         (paciente_id, medico_id, fecha_hora, ta, fc, sato2, fr, temperatura, peso, talla,
+          sintomas, exploracion, evolutivo, plan, corrige_a, motivo_correccion)
+       VALUES ($1, $2,
+               -- La corrección es de la MISMA visita: hereda su fecha_hora salvo que
+               -- se corrija precisamente esa fecha. Cuándo se corrigió lo guarda
+               -- "creado". El valor se copia DENTRO de SQL y no vía JS: timestamptz
+               -- tiene microsegundos y el Date de JavaScript solo milisegundos, así
+               -- que el viaje de ida y vuelta desplazaría la hora de la visita.
+               COALESCE($3::timestamptz, (SELECT fecha_hora FROM sherlock.notas_evolucion WHERE id = $15)),
+               $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       RETURNING *`,
+      [
+        o.paciente_id, req.session.user.medico_id, fechaHora,
+        b.ta || null, b.fc || null, b.sato2 || null, b.fr || null, b.temperatura || null,
+        b.peso || null, b.talla || null,
+        b.sintomas || null, b.exploracion || null, b.evolutivo || null, b.plan || null,
+        o.id, motivo,
+      ]
+    );
+    const nota = rows[0];
+    await audit(req, 'corregir', 'nota_evolucion', nota.id, { corrige_a: o.id, motivo });
+    res.status(201).json(nota);
+  } catch (e) {
+    console.error('[POST /api/notas/:notaId/correccion]', e.message);
+    res.status(500).json({ error: 'No se pudo registrar la corrección.' });
+  }
+});
+
 // Lista los tratamientos de un paciente del médico en sesión, cada uno con su
 // arreglo de ciclos ordenados por fecha (404 si el paciente no es suyo).
 app.get('/api/pacientes/:id/tratamientos', requireAuth, ensureMedicoId, async (req, res) => {

@@ -96,6 +96,10 @@ CREATE TABLE IF NOT EXISTS sherlock.notas_evolucion (
   exploracion  text,
   evolutivo    text,
   plan         text,
+  -- Corrección tipo addendum (ver migración 006): si corrige_a no es NULL, esta
+  -- fila es la corrección de esa nota original, que se conserva intacta.
+  corrige_a          int REFERENCES sherlock.notas_evolucion(id),
+  motivo_correccion  text,
   creado       timestamptz DEFAULT now()
 );
 
@@ -139,5 +143,6 @@ CREATE TABLE IF NOT EXISTS sherlock.auditoria (
 CREATE INDEX IF NOT EXISTS idx_auditoria_entidad ON sherlock.auditoria (entidad, entidad_id);
 CREATE INDEX IF NOT EXISTS idx_pacientes_medico  ON sherlock.pacientes (medico_id);
 CREATE INDEX IF NOT EXISTS idx_notas_paciente        ON sherlock.notas_evolucion (paciente_id);
+CREATE INDEX IF NOT EXISTS idx_notas_corrige_a       ON sherlock.notas_evolucion (corrige_a);
 CREATE INDEX IF NOT EXISTS idx_tratamientos_paciente ON sherlock.tratamientos (paciente_id);
 CREATE INDEX IF NOT EXISTS idx_ciclos_tratamiento    ON sherlock.ciclos (tratamiento_id);

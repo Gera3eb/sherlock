@@ -408,6 +408,8 @@ const S={
   modalNota:false, notaForm:null, notaGuardando:false, notaError:'',
   modalTrat:false, tratForm:null, tratGuardando:false, tratError:'',
   modalCiclo:false, cicloForm:null, cicloGuardando:false, cicloError:'',
+  // Corrección de una nota (addendum: no sobrescribe, agrega — ver migración 006).
+  modalCorr:false, corrForm:null, corrGuardando:false, corrError:'',
   antForm:null, antGuardando:false, antMsg:'',
   estudForm:null, estudGuardando:false, estudMsg:'', estudAbierto:false,
   npForm:{ nombre:'', sexo:'F', fecha_nacimiento:'', telefono:'', correo:'', seguro:'', dx_resumen:'' },
@@ -1329,7 +1331,12 @@ function tabExploracionReal(){
   if(!listas) return `<div class="card pad"><p class="lead" style="margin:0">Cargando…</p></div>`;
 
   const btn=`<button class="btn btn-primary" data-evol-nota style="padding:8px 14px">${ICN.plus} Registrar nueva medición</button>`;
-  const n=S.notas[0]||null;
+  // Visita más reciente, en su versión VIGENTE: si la nota fue corregida, aquí
+  // manda la corrección — sería grave calcular la dosis sobre un peso corregido.
+  const grupos=notasAgrupadas(S.notas);
+  const g=grupos[0]||null;
+  const n=g?notaEfectiva(g):null;
+  const fueCorregida=!!(g && g.correcciones.length);
 
   // Sin notas todavía: no hay nada que medir ni que calcular.
   if(!n) return `<div class="card pad">
@@ -1387,7 +1394,7 @@ function tabExploracionReal(){
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:6px">
         <div class="section-title" style="margin:0">Signos vitales</div>${btn}
       </div>
-      <p class="lead" style="font-size:12.5px;margin-bottom:10px">Última medición registrada · ${esc(fechaHoraES(n.fecha_hora))}</p>
+      <p class="lead" style="font-size:12.5px;margin-bottom:10px">Última medición registrada · ${esc(fechaHoraES(n.fecha_hora))}${fueCorregida?' <span class="chip chip-warn" style="font-size:10.5px">versión corregida</span>':''}</p>
       ${fila('Frecuencia cardíaca',n.fc,'lpm','20–250')}
       ${fila('Frecuencia respiratoria',n.fr,'rpm','8–40')}
       ${fila('Temperatura',n.temperatura,'°C','35–41')}
@@ -1570,25 +1577,65 @@ function evolTratamientoCard(t){
     ${cuerpo}
   </div>`;
 }
-// Render de una nota de evolución: encabezado con fecha/hora, signos vitales
-// presentes (omite nulos) y los textos clínicos no vacíos.
-function evolNotaCard(n){
+// Agrupa las notas en visitas: cada nota ORIGINAL con sus correcciones. La API
+// las devuelve planas y mezcladas (originales y correcciones), más nuevas primero.
+function notasAgrupadas(notas){
+  const lista=Array.isArray(notas)?notas:[];
+  const porOriginal=new Map();
+  for(const n of lista){
+    if(n.corrige_a==null) continue;
+    const k=String(n.corrige_a);
+    if(!porOriginal.has(k)) porOriginal.set(k,[]);
+    porOriginal.get(k).push(n);
+  }
+  // De la más antigua a la más nueva: así se leen como historial de la visita.
+  for(const arr of porOriginal.values()) arr.sort((a,b)=>(a.id||0)-(b.id||0));
+  return lista.filter(n=>n.corrige_a==null)
+              .map(o=>({ original:o, correcciones:porOriginal.get(String(o.id))||[] }));
+}
+// Versión vigente de una visita: la última corrección, o la original si no hubo.
+function notaEfectiva(g){
+  return g.correcciones.length ? g.correcciones[g.correcciones.length-1] : g.original;
+}
+
+// Cuerpo de una nota: signos vitales presentes (omite nulos) y textos no vacíos.
+function notaCuerpo(n){
   const sv=[['TA',n.ta],['FC',n.fc],['SatO2',n.sato2],['FR',n.fr],['Temp',n.temperatura],['Peso',n.peso],['Talla',n.talla]]
     .filter(x=>x[1]!=null && String(x[1]).trim()!=='')
     .map(x=>`<span class="chip chip-line" style="font-size:11.5px">${x[0]}: ${esc(x[1])}</span>`).join('');
   const campo=(label,val)=> (val!=null && String(val).trim()!=='')
     ? `<div style="margin-top:8px"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--slate)">${label}</div>
        <div style="font-size:13px;color:var(--ink);white-space:pre-wrap">${esc(val)}</div></div>` : '';
-  return `<div class="card pad" style="margin-bottom:12px">
-    <div style="display:flex;align-items:center;gap:9px;margin-bottom:4px">
-      <span style="color:var(--petrol)">${ICN.doc}</span>
-      <b style="font-size:13px">${esc(fechaHoraES(n.fecha_hora))}</b>
-    </div>
-    ${sv?`<div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:6px">${sv}</div>`:''}
+  return `${sv?`<div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:6px">${sv}</div>`:''}
     ${campo('Síntomas',n.sintomas)}
     ${campo('Exploración',n.exploracion)}
     ${campo('Evolutivo',n.evolutivo)}
-    ${campo('Plan',n.plan)}
+    ${campo('Plan',n.plan)}`;
+}
+
+// Render de una visita: la nota original y, debajo, sus correcciones en orden.
+// La original NUNCA se oculta ni se reescribe — se atenúa y se rotula como tal,
+// que es lo que exige un expediente clínico: lo asentado se queda.
+function evolNotaCard(g){
+  const o=g.original, corr=g.correcciones, corregida=corr.length>0;
+  const badge = corregida
+    ? `<span class="chip chip-warn" style="font-size:11px">Corregida${corr.length>1?` · ${corr.length}`:''}</span>` : '';
+  const btn = `<button class="btn btn-ghost" data-corregir="${esc(o.id)}" style="margin-left:auto;padding:6px 11px;font-size:12px">${ICN.doc} Corregir</button>`;
+  const bloques = corr.map(c=>`
+    <div style="margin-top:13px;padding-left:13px;border-left:2px solid var(--brass)">
+      <b style="font-size:12.5px;color:var(--brass-deep)">Corrección · ${esc(fechaHoraES(c.creado))}</b>
+      <div style="font-size:12px;color:var(--slate);margin-top:3px"><b>Motivo:</b> ${esc(c.motivo_correccion||'—')}</div>
+      ${notaCuerpo(c)}
+    </div>`).join('');
+  return `<div class="card pad" style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:4px;flex-wrap:wrap">
+      <span style="color:var(--petrol)">${ICN.doc}</span>
+      <b style="font-size:13px">${esc(fechaHoraES(o.fecha_hora))}</b>
+      ${badge}${btn}
+    </div>
+    ${corregida?`<div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-top:7px">Versión original</div>`:''}
+    <div style="${corregida?'opacity:.6':''}">${notaCuerpo(o)}</div>
+    ${bloques}
   </div>`;
 }
 function tabEvolucionReal(){
@@ -1601,7 +1648,7 @@ function tabEvolucionReal(){
         : `<div class="card pad"><p style="margin:0;color:var(--muted);font-size:13px">Sin tratamientos registrados</p></div>`);
 
   const notasSec = !notasListas ? cargando
-    : (S.notas.length ? S.notas.map(evolNotaCard).join('')
+    : (S.notas.length ? notasAgrupadas(S.notas).map(evolNotaCard).join('')
         : `<div class="card pad"><p style="margin:0;color:var(--muted);font-size:13px">Sin notas de evolución</p></div>`);
 
   const cab=(titulo,boton)=>`<div style="display:flex;align-items:center;justify-content:space-between;margin:${titulo==='Tratamientos'?'0':'24px'} 0 12px">
@@ -1616,7 +1663,8 @@ function tabEvolucionReal(){
     <div class="note" style="margin-top:16px">${ICN.info}<div>Seguimiento del paciente subsecuente: registra notas de evolución y tratamientos con sus ciclos.</div></div>
     ${S.modalNota?modalNuevaNota():''}
     ${S.modalTrat?modalNuevoTratamiento():''}
-    ${S.modalCiclo?modalNuevoCiclo():''}`;
+    ${S.modalCiclo?modalNuevoCiclo():''}
+    ${S.modalCorr?modalCorreccion():''}`;
 }
 function tabEvolucion(p){
   const num=esNumId(S.patient);
@@ -1720,6 +1768,39 @@ function abrirModalCiclo(tratId){
 }
 function cerrarModalCiclo(){ S.modalCiclo=false; S.cicloGuardando=false; S.cicloError=''; render(); }
 
+// Modal "Corregir nota": se precarga con la versión VIGENTE (la última corrección
+// si la hubo), porque se corrige sobre lo que hoy vale, no sobre lo ya enmendado.
+// El motivo es obligatorio: una corrección sin motivo no es auditable.
+function modalCorreccion(){
+  const f=S.corrForm||{};
+  const sv=(k,label,ph)=>`<div class="field" style="flex:1"><label>${label}</label><input class="input" data-corr="${k}" value="${esc(f[k]||'')}" placeholder="${ph}"></div>`;
+  const ta=(k,label,ph)=>`<div class="field"><label>${label}</label><textarea class="input" data-corr="${k}" rows="3" style="min-height:78px;resize:vertical" placeholder="${ph}">${esc(f[k]||'')}</textarea></div>`;
+  const cuerpo=`
+    <div class="note" style="margin-bottom:15px">${ICN.info}<div>La nota original se conserva sin cambios. Esta corrección se agrega al expediente, fechada y a tu nombre.</div></div>
+    <div class="field"><label>Motivo de la corrección <span class="hint">· requerido</span></label>
+      <textarea class="input" data-corr="motivo_correccion" rows="2" style="min-height:60px;resize:vertical" placeholder="Ej. Se capturó la TA de otro paciente">${esc(f.motivo_correccion||'')}</textarea></div>
+    <div style="display:flex;gap:12px">${sv('ta','TA','120/80')}${sv('fc','FC','78')}${sv('sato2','SatO2','97%')}</div>
+    <div style="display:flex;gap:12px">${sv('fr','FR','16')}${sv('temperatura','Temperatura','36.6')}${sv('peso','Peso (kg)','65.850')}</div>
+    <div style="display:flex;gap:12px">${sv('talla','Talla (m)','1.76')}<div class="field" style="flex:2"></div></div>
+    ${ta('sintomas','Síntomas','Motivo de la visita, síntomas referidos…')}
+    ${ta('exploracion','Exploración física','Hallazgos a la exploración…')}
+    ${ta('evolutivo','Evolutivo','Evolución desde la última visita…')}
+    ${ta('plan','Plan','Conducta, indicaciones, próximo control…')}`;
+  return evolModalShell('Corregir nota de evolución','data-corr-cancel',S.corrError,cuerpo,'data-corr-save',S.corrGuardando);
+}
+function abrirModalCorreccion(notaId){
+  const g=notasAgrupadas(S.notas).find(x=>String(x.original.id)===String(notaId));
+  if(!g) return;
+  const b=notaEfectiva(g);
+  S.corrForm={ notaId:String(notaId),
+    ta:b.ta||'', fc:b.fc||'', sato2:b.sato2||'', fr:b.fr||'', temperatura:b.temperatura||'',
+    peso:b.peso||'', talla:b.talla||'',
+    sintomas:b.sintomas||'', exploracion:b.exploracion||'', evolutivo:b.evolutivo||'', plan:b.plan||'',
+    motivo_correccion:'' };
+  S.corrError=''; S.corrGuardando=false; S.modalCorr=true; render();
+}
+function cerrarModalCorreccion(){ S.modalCorr=false; S.corrGuardando=false; S.corrError=''; render(); }
+
 // Normaliza un campo de texto a su valor o null (los vacíos no se envían como '').
 function oNull(v){ const s=(v==null?'':String(v)).trim(); return s||null; }
 
@@ -1743,6 +1824,24 @@ async function guardarNota(){
     S.modalNota=false; S.notaGuardando=false; S.notaError='';
     await cargarNotas(S.patient);   // recarga: la nota nueva aparece arriba
   }catch(e){ S.notaGuardando=false; S.notaError='No se pudo conectar con el servidor. Intenta de nuevo.'; render(); }
+}
+async function guardarCorreccion(){
+  const f=S.corrForm||{};
+  if(!(f.motivo_correccion||'').trim()){ S.corrError='El motivo de la corrección es obligatorio.'; render(); return; }
+  const body={ motivo_correccion:f.motivo_correccion.trim(),
+    ta:oNull(f.ta), fc:oNull(f.fc), sato2:oNull(f.sato2), fr:oNull(f.fr), temperatura:oNull(f.temperatura),
+    peso:oNull(f.peso), talla:oNull(f.talla),
+    sintomas:oNull(f.sintomas), exploracion:oNull(f.exploracion), evolutivo:oNull(f.evolutivo), plan:oNull(f.plan) };
+  S.corrError=''; S.corrGuardando=true; render();
+  try{
+    const r=await fetch(`/api/notas/${f.notaId}/correccion`,{
+      method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body:JSON.stringify(body)
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){ S.corrGuardando=false; S.corrError=data.error||'No se pudo registrar la corrección.'; render(); return; }
+    S.modalCorr=false; S.corrGuardando=false; S.corrError='';
+    await cargarNotas(S.patient);   // recarga: la corrección aparece bajo su original
+  }catch(e){ S.corrGuardando=false; S.corrError='No se pudo conectar con el servidor. Intenta de nuevo.'; render(); }
 }
 async function guardarTratamiento(){
   const f=S.tratForm||{};
@@ -2141,6 +2240,11 @@ function bind(){
   // Cancelar / guardar de cada modal
   document.querySelectorAll('[data-nota-cancel]').forEach(el=>el.onclick=()=>cerrarModalNota());
   document.querySelectorAll('[data-nota-save]').forEach(el=>el.onclick=()=>guardarNota());
+  // Corrección de nota (addendum): abrir, cancelar, guardar y captura sin re-render.
+  document.querySelectorAll('[data-corregir]').forEach(el=>el.onclick=()=>abrirModalCorreccion(el.getAttribute('data-corregir')));
+  document.querySelectorAll('[data-corr-cancel]').forEach(el=>el.onclick=()=>cerrarModalCorreccion());
+  document.querySelectorAll('[data-corr-save]').forEach(el=>el.onclick=()=>guardarCorreccion());
+  document.querySelectorAll('[data-corr]').forEach(el=>el.oninput=el.onchange=()=>{if(!S.corrForm)S.corrForm={};S.corrForm[el.getAttribute('data-corr')]=el.value;});
   document.querySelectorAll('[data-trat-cancel]').forEach(el=>el.onclick=()=>cerrarModalTrat());
   document.querySelectorAll('[data-trat-save]').forEach(el=>el.onclick=()=>guardarTratamiento());
   document.querySelectorAll('[data-ciclo-cancel]').forEach(el=>el.onclick=()=>cerrarModalCiclo());

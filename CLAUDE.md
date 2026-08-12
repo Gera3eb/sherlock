@@ -72,6 +72,7 @@ Protegidas (`requireAuth`); las de datos además pasan por `ensureMedicoId` y fi
 - Expediente: `GET /api/pacientes/:id/expediente` · `PUT /api/pacientes/:id/antecedentes` ·
   `POST /api/pacientes/:id/diagnostico` · `POST /api/pacientes/:id/estudios`
 - Evolución: `GET|POST /api/pacientes/:id/notas` · `GET /api/notas/:notaId` ·
+  `POST /api/notas/:notaId/correccion` ·
   `GET|POST /api/pacientes/:id/tratamientos` · `POST /api/tratamientos/:tratId/ciclos` ·
   `DELETE /api/tratamientos/:tratId/ciclos/:cicloId`
 - Agenda: `GET|POST /api/citas` · `DELETE /api/citas/:id`
@@ -115,6 +116,23 @@ Peso y talla se guardan como texto libre; `numDeTexto()` y `tallaACm()` los inte
 (la talla se asume en metros por debajo de 3, en cm por encima). Si falta peso o talla, las
 calculadoras **dicen qué falta** en vez de calcular sobre un supuesto.
 
+### Corrección de notas (addendum)
+Una nota de evolución **no se sobrescribe ni se borra**: corregirla inserta una nota nueva
+con `corrige_a` apuntando a la original, que se conserva intacta y sigue visible en la
+pestaña (atenuada y rotulada "Versión original"). Es lo que pide NOM-004 — lo asentado en el
+expediente se queda, y la enmienda queda fechada (`creado`), firmada (`medico_id`) y con su
+`motivo_correccion`, que la API exige.
+
+Reglas que no hay que romper:
+- **Modelo plano**: `corrige_a` apunta siempre a una nota ORIGINAL. La API rechaza corregir
+  una corrección, para que no se formen cadenas ilegibles. Una visita es "original + N
+  correcciones"; la última es la vigente.
+- **La corrección hereda `fecha_hora` de la original** (es la misma visita) copiándola
+  *dentro* de SQL: el `Date` de JS solo tiene milisegundos y `timestamptz` microsegundos, así
+  que pasarla por JS desplaza la hora de la visita.
+- **Quien consuma la nota debe usar la versión vigente**, no la original. En el front eso es
+  `notaEfectiva()`; Exploración la usa para no calcular BSA/IMC sobre un peso ya corregido.
+
 ### Buscador global
 `GET /api/buscar` busca en pacientes, diagnósticos y estudios, todo acotado por `medico_id`
 (diagnósticos y estudios lo alcanzan por JOIN a pacientes). Dos cosas que no hay que perder
@@ -134,7 +152,9 @@ solo, sobre `#q-panel` (ver `pintarPanel()`).
 - **Paciente demo `'sara'`** sigue en el front con id de texto y sostiene un camino de
   código paralelo (`esNumId()`); retirar cuando la BD sea la única fuente.
 - **Estudios**: solo aceptan `archivo_url`, falta subida de archivos.
-- **Editar/borrar**: solo hay DELETE en citas y ciclos.
+- **Editar/corregir**: las notas de evolución ya se corrigen por addendum (arriba). Falta
+  para pacientes, estudios, antecedentes y diagnósticos — que son datos clínicos, así que
+  conviene el mismo criterio de addendum antes que un UPDATE. Borrar: solo citas y ciclos.
 - **Motor de estadificación**: solo mama. Próstata/colon/pulmón están parametrizados pero
   sin catálogos (el seed incluye un paciente de próstata que aún no se puede estadificar).
 - **Antes de pacientes reales**: contraseñas en texto plano en `.env` (falta hash),
