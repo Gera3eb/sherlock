@@ -1204,7 +1204,132 @@ function tabHistoria(p){
 }
 
 /* ---- Exploración / signos vitales ---- */
+/* ---- Exploración física ---- */
+// Peso y talla se capturan como TEXTO libre en la nota de evolución ("65.850",
+// "72 kg", "1.76", "162 cm"): se toma el primer número y se ignora el resto.
+// Devuelve null si no hay número o no es positivo — nunca un valor inventado.
+function numDeTexto(v){
+  if(v==null) return null;
+  const m=/\d+(?:[.,]\d+)?/.exec(String(v));
+  if(!m) return null;
+  const n=parseFloat(m[0].replace(',','.'));
+  return (isFinite(n) && n>0) ? n : null;
+}
+// Talla a centímetros: el modal la pide en metros ("1.76") pero el médico puede
+// escribirla en cm ("162"). Se decide por magnitud — ninguna talla llega a 3 m.
+function tallaACm(v){
+  const n=numDeTexto(v);
+  if(n==null) return null;
+  return n<3 ? n*100 : n;
+}
+// Clasificación del IMC (OMS), para no rotular "normal" a ciegas.
+function clasifIMC(imc){
+  if(imc<18.5) return 'bajo peso';
+  if(imc<25)   return 'normal';
+  if(imc<30)   return 'sobrepeso';
+  return 'obesidad';
+}
+
+// Exploración física del paciente real: signos vitales de la nota MÁS RECIENTE y
+// antropometría derivada de ese peso/talla verdaderos.
+//
+// Es una vista de SOLO LECTURA a propósito. La captura de signos vitales ya vive
+// en el modal de nota de evolución, así que aquí se reusa ese mismo modal con
+// "Registrar nueva medición": un único camino de escritura hacia notas_evolucion
+// y, por tanto, una sola versión de cada consulta. Lo propio de esta pestaña son
+// las calculadoras (BSA e IMC), que alimentan la dosificación.
+function tabExploracionReal(){
+  const listas = S.notasCargadas && S.notasFor===String(S.patient);
+  if(!listas) return `<div class="card pad"><p class="lead" style="margin:0">Cargando…</p></div>`;
+
+  const btn=`<button class="btn btn-primary" data-evol-nota style="padding:8px 14px">${ICN.plus} Registrar nueva medición</button>`;
+  const n=S.notas[0]||null;
+
+  // Sin notas todavía: no hay nada que medir ni que calcular.
+  if(!n) return `<div class="card pad">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+        <div>
+          <div class="section-title" style="margin:0 0 6px">Signos vitales</div>
+          <p class="lead" style="margin:0;font-size:13px">Sin mediciones registradas. Los signos vitales se toman al registrar una nota de evolución.</p>
+        </div>${btn}
+      </div>
+    </div>
+    ${S.modalNota?modalNuevaNota():''}`;
+
+  const pesoKg=numDeTexto(n.peso);
+  const tallaCm=tallaACm(n.talla);
+  const puede=(pesoKg!=null && tallaCm!=null);
+  const bsaMost = puede ? Math.sqrt((tallaCm*pesoKg)/3600) : null;
+  const bsaDu   = puede ? 0.007184*Math.pow(tallaCm,0.725)*Math.pow(pesoKg,0.425) : null;
+  const imc     = puede ? pesoKg/Math.pow(tallaCm/100,2) : null;
+
+  // Renglón de signo vital: valor tal como lo capturó el médico, "—" si no lo registró.
+  const fila=(label,val,unidad,rango)=>{
+    const hay = (val!=null && String(val).trim()!=='');
+    return `<div class="vital">
+      <div class="vl">${label}</div>
+      <div style="text-align:center;font-weight:600;font-size:14.5px;color:${hay?'var(--ink)':'var(--muted)'}">${hay?esc(val):'—'}</div>
+      <div class="vr">${unidad} · <span style="color:var(--ok)">${rango}</span></div></div>`;
+  };
+
+  // Tarjeta de reemplazo cuando falta el dato de origen: se dice qué falta en vez
+  // de calcular sobre un supuesto.
+  const faltantes=[pesoKg==null?'el peso':null, tallaCm==null?'la talla':null].filter(Boolean).join(' ni ');
+  const sinDato=(titulo)=>`<div class="card pad" style="margin-bottom:12px">
+    <div class="section-title" style="margin:0 0 6px">${titulo}</div>
+    <p class="lead" style="margin:0;font-size:12.5px">No se puede calcular: la última nota no registra ${faltantes}.</p></div>`;
+
+  const calcBSA = puede
+    ? `<div class="calc-card" style="margin-bottom:12px">
+        <div class="cl">Superficie corporal (BSA)</div>
+        <div class="cv">${bsaMost.toFixed(2)} <span style="font-size:15px;color:#8FBDBC">m²</span></div>
+        <div class="cf">Mosteller · √(talla×peso/3600)</div>
+        <div class="cf">Du Bois: ${bsaDu.toFixed(2)} m²</div>
+      </div>`
+    : sinDato('Superficie corporal (BSA)');
+
+  const calcIMC = puede
+    ? `<div class="calc-card" style="background:linear-gradient(160deg,#9A6A24,#7c5419);margin-bottom:12px">
+        <div class="cl" style="color:#F0DDBE">Índice de masa corporal</div>
+        <div class="cv">${imc.toFixed(1)}</div>
+        <div class="cf" style="color:#F0DDBE">peso / talla² · ${clasifIMC(imc)}</div>
+      </div>`
+    : sinDato('Índice de masa corporal');
+
+  return `<div class="grid2" style="grid-template-columns:1.25fr .75fr;gap:22px">
+    <div class="card pad">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+        <div class="section-title" style="margin:0">Signos vitales</div>${btn}
+      </div>
+      <p class="lead" style="font-size:12.5px;margin-bottom:10px">Última medición registrada · ${esc(fechaHoraES(n.fecha_hora))}</p>
+      ${fila('Frecuencia cardíaca',n.fc,'lpm','20–250')}
+      ${fila('Frecuencia respiratoria',n.fr,'rpm','8–40')}
+      ${fila('Temperatura',n.temperatura,'°C','35–41')}
+      ${fila('SatO₂',n.sato2,'%','30–100')}
+      ${fila('TA',n.ta,'mmHg','sist/diast')}
+      ${fila('Peso',n.peso,'kg','20–200')}
+      ${fila('Estatura',n.talla,'m','—')}
+    </div>
+    <div>
+      ${calcBSA}
+      ${calcIMC}
+      <div class="note">${ICN.target}<div><b>Dosificación.</b> La BSA alimenta el cálculo de dosis de quimioterapia; para carboplatino se integrará la fórmula de Calvert (AUC × [TFG + 25]).</div></div>
+    </div>
+  </div>
+  ${S.modalNota?modalNuevaNota():''}`;
+}
+
 function tabExploracion(p){
+  const num=esNumId(S.patient);
+  const real=(num && S.expediente && S.expediente.paciente && String(S.expediente.paciente.id)===String(S.patient)) ? S.expediente : null;
+  if(real){
+    // Las notas son la fuente de los signos vitales: se cargan una vez por paciente
+    // (la pestaña Evolución usa el mismo estado, así que no se piden dos veces).
+    if(S.notasFor!==String(S.patient) && !S.notasCargando) cargarNotas(S.patient);
+    return tabExploracionReal();
+  }
+  if(num) return `<div class="card pad"><p class="lead" style="margin:0">Cargando expediente…</p></div>`;
+  // Paciente demo (id de texto): contenido ilustrativo original, sin API.
   const w=72, h=162; // kg, cm
   const bsaMost=Math.sqrt((h*w)/3600);
   const bsaDu=0.007184*Math.pow(h,0.725)*Math.pow(w,0.425);
@@ -1215,8 +1340,7 @@ function tabExploracion(p){
   return `<div class="grid2" style="grid-template-columns:1.25fr .75fr;gap:22px">
     <div class="card pad">
       <div class="section-title" style="margin-bottom:6px">Signos vitales</div>
-      <p class="lead" style="font-size:12.5px;margin-bottom:10px">Con validación de rango. Se actualizan en cada consulta.</p>
-      <!-- Orden a confirmar por el Dr. Soto: basta reordenar estos renglones. -->
+      <p class="lead" style="font-size:12.5px;margin-bottom:10px">Ejemplo ilustrativo. Al abrir un paciente real, se muestran las mediciones registradas.</p>
       ${v('Frecuencia cardíaca','78','lpm','20–250')}
       ${v('Frecuencia respiratoria','16','rpm','8–40')}
       ${v('Temperatura','36.6','°C','35–41')}
@@ -1224,7 +1348,6 @@ function tabExploracion(p){
       ${vTA('128','82')}
       ${v('Peso','72.0','kg','20–200')}
       ${v('Estatura','162','cm','20–200')}
-      <button class="btn btn-primary" style="margin-top:14px">${ICN.check} Confirmar y registrar</button>
     </div>
     <div>
       <div class="calc-card" style="margin-bottom:12px">
@@ -1236,7 +1359,7 @@ function tabExploracion(p){
       <div class="calc-card" style="background:linear-gradient(160deg,#9A6A24,#7c5419);margin-bottom:12px">
         <div class="cl" style="color:#F0DDBE">Índice de masa corporal</div>
         <div class="cv">${bmi.toFixed(1)}</div>
-        <div class="cf" style="color:#F0DDBE">peso / talla² · normal</div>
+        <div class="cf" style="color:#F0DDBE">peso / talla² · ${clasifIMC(bmi)}</div>
       </div>
       <div class="note">${ICN.target}<div><b>Dosificación.</b> La BSA alimenta el cálculo de dosis de quimioterapia; para carboplatino se integrará la fórmula de Calvert (AUC × [TFG + 25]).</div></div>
     </div>
@@ -1364,7 +1487,7 @@ function evolTratamientoCard(t){
 // Render de una nota de evolución: encabezado con fecha/hora, signos vitales
 // presentes (omite nulos) y los textos clínicos no vacíos.
 function evolNotaCard(n){
-  const sv=[['TA',n.ta],['FC',n.fc],['SatO2',n.sato2],['FR',n.fr],['Peso',n.peso],['Talla',n.talla]]
+  const sv=[['TA',n.ta],['FC',n.fc],['SatO2',n.sato2],['FR',n.fr],['Temp',n.temperatura],['Peso',n.peso],['Talla',n.talla]]
     .filter(x=>x[1]!=null && String(x[1]).trim()!=='')
     .map(x=>`<span class="chip chip-line" style="font-size:11.5px">${x[0]}: ${esc(x[1])}</span>`).join('');
   const campo=(label,val)=> (val!=null && String(val).trim()!=='')
@@ -1458,7 +1581,8 @@ function modalNuevaNota(){
     </div>
     <div class="hint" style="margin:-4px 0 10px">Si dejas fecha y hora vacías, se registra con la fecha y hora actuales.</div>
     <div style="display:flex;gap:12px">${sv('ta','TA','120/80')}${sv('fc','FC','78')}${sv('sato2','SatO2','97%')}</div>
-    <div style="display:flex;gap:12px">${sv('fr','FR','16')}${sv('peso','Peso (kg)','65.850')}${sv('talla','Talla (m)','1.76')}</div>
+    <div style="display:flex;gap:12px">${sv('fr','FR','16')}${sv('temperatura','Temperatura','36.6')}${sv('peso','Peso (kg)','65.850')}</div>
+    <div style="display:flex;gap:12px">${sv('talla','Talla (m)','1.76')}<div class="field" style="flex:2"></div></div>
     ${ta('sintomas','Síntomas','Motivo de la visita, síntomas referidos…')}
     ${ta('exploracion','Exploración física','Hallazgos a la exploración…')}
     ${ta('evolutivo','Evolutivo','Evolución desde la última visita…')}
@@ -1495,7 +1619,7 @@ function modalNuevoCiclo(){
 }
 
 function abrirModalNota(){
-  S.notaForm={ fecha:'', hora:'', ta:'', fc:'', sato2:'', fr:'', peso:'', talla:'', sintomas:'', exploracion:'', evolutivo:'', plan:'' };
+  S.notaForm={ fecha:'', hora:'', ta:'', fc:'', sato2:'', fr:'', temperatura:'', peso:'', talla:'', sintomas:'', exploracion:'', evolutivo:'', plan:'' };
   S.notaError=''; S.notaGuardando=false; S.modalNota=true; render();
 }
 function cerrarModalNota(){ S.modalNota=false; S.notaGuardando=false; S.notaError=''; render(); }
@@ -1520,7 +1644,8 @@ async function guardarNota(){
   let fecha_hora=null;
   if(f.fecha){ fecha_hora=`${f.fecha}T${f.hora||'00:00'}`; }
   const body={ fecha_hora,
-    ta:oNull(f.ta), fc:oNull(f.fc), sato2:oNull(f.sato2), fr:oNull(f.fr), peso:oNull(f.peso), talla:oNull(f.talla),
+    ta:oNull(f.ta), fc:oNull(f.fc), sato2:oNull(f.sato2), fr:oNull(f.fr), temperatura:oNull(f.temperatura),
+    peso:oNull(f.peso), talla:oNull(f.talla),
     sintomas:oNull(f.sintomas), exploracion:oNull(f.exploracion), evolutivo:oNull(f.evolutivo), plan:oNull(f.plan) };
   S.notaError=''; S.notaGuardando=true; render();
   try{

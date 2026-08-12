@@ -363,12 +363,13 @@ app.post('/api/pacientes/:id/notas', requireAuth, ensureMedicoId, async (req, re
     }
     const { rows } = await pool.query(
       `INSERT INTO sherlock.notas_evolucion
-         (paciente_id, medico_id, fecha_hora, ta, fc, sato2, fr, peso, talla, sintomas, exploracion, evolutivo, plan)
-       VALUES ($1, $2, COALESCE($3::timestamptz, now()), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         (paciente_id, medico_id, fecha_hora, ta, fc, sato2, fr, temperatura, peso, talla, sintomas, exploracion, evolutivo, plan)
+       VALUES ($1, $2, COALESCE($3::timestamptz, now()), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING *`,
       [
         id, req.session.user.medico_id, fechaHora,
-        b.ta || null, b.fc || null, b.sato2 || null, b.fr || null, b.peso || null, b.talla || null,
+        b.ta || null, b.fc || null, b.sato2 || null, b.fr || null, b.temperatura || null,
+        b.peso || null, b.talla || null,
         b.sintomas || null, b.exploracion || null, b.evolutivo || null, b.plan || null,
       ]
     );

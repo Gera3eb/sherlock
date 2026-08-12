@@ -98,13 +98,23 @@ npm start                              # http://localhost:$PORT
 Conectado a la BD real: **Agenda** (citas del día, rubros Consultas/Quimioterapia, KPIs,
 alta de cita), **Pacientes** (lista y alta), y el expediente en sus pestañas de
 **Historia/Antecedentes**, **Estudios**, **Diagnóstico** (TNM/AJCC con `tamano_mm` real),
-**Evolución** (notas + tratamientos + ciclos) e **Informe** (lee el expediente, con
-impresión nativa vía `@media print`). Cada operación deja registro en `auditoria`.
+**Evolución** (notas + tratamientos + ciclos), **Exploración física** e **Informe** (lee el
+expediente, con impresión nativa vía `@media print`). Cada operación deja registro en
+`auditoria`.
+
+### Exploración física y notas de evolución
+Los signos vitales tienen **un solo camino de escritura**: el modal de nota de evolución
+(`POST /api/pacientes/:id/notas`). Exploración es una vista de **solo lectura** sobre la
+nota más reciente — muestra esos vitales y calcula BSA (Mosteller y Du Bois) e IMC a partir
+del peso y talla reales — y su botón "Registrar nueva medición" reusa ese mismo modal.
+No agregar un segundo formulario de captura de vitales: dos caminos de escritura sobre
+`notas_evolucion` producen dos versiones de la misma consulta.
+
+Peso y talla se guardan como texto libre; `numDeTexto()` y `tallaACm()` los interpretan
+(la talla se asume en metros por debajo de 3, en cm por encima). Si falta peso o talla, las
+calculadoras **dicen qué falta** en vez de calcular sobre un supuesto.
 
 ## Pendientes conocidos
-- **Exploración física** es la única pestaña sin persistencia: signos vitales y BSA/IMC
-  hardcodeados, el botón no guarda. Ojo: los signos vitales ya se capturan en
-  `notas_evolucion` — hay que decidir si Exploración escribe esa nota o se fusionan.
 - **Buscador global** de la topbar: decorativo, sin binding.
 - **Modo Asistente · iPad**: maqueta, no persiste. El toggle Médico/Asistente es visual;
   no existe rol `asistente` real ni permisos diferenciados.

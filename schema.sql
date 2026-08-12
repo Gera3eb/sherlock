@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS sherlock.notas_evolucion (
   fc           text,
   sato2        text,
   fr           text,
+  temperatura  text,
   peso         text,
   talla        text,
   sintomas     text,
