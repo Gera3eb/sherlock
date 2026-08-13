@@ -385,6 +385,8 @@ if(__USER__ && __USER__.role && DOCTORS[__USER__.role]){
 const S={
   route:'agenda', doc:(__USER__&&__USER__.role&&DOCTORS[__USER__.role])?__USER__.role:'soto', role:'medico', patient:'sara', tab:'historia',
   ipadStep:0,
+  // --- Suscripción ICS de la agenda (API real) ---
+  ics:null, icsCargado:false, icsMsg:'',
   // --- Buscador global (API real) ---
   // q vive fuera del ciclo de render: el panel se repinta solo (ver pintarPanel).
   q:'', qRes:null, qCargando:false, qAbierto:false,
@@ -526,6 +528,8 @@ function fechaLargaES(iso){
 function viewAgenda(){
   // Carga una sola vez por fecha al entrar a la vista.
   if(!S.citasCargadas){ cargarCitas(S.citasFecha); }
+  // Estado del enlace de suscripción: una sola vez por sesión de vista.
+  if(!S.icsCargado){ cargarICS(); }
   const citas=S.citas||[];
   // Dos rubros únicos: Quimioterapia y Consultas (todo lo demás).
   const quimio   = citas.filter(esCitaQuimio);
@@ -564,7 +568,9 @@ function viewAgenda(){
       </div>
       <div style="display:flex;gap:10px;align-items:center">
         <input class="input" type="date" data-citas-fecha value="${esc(S.citasFecha)}" style="width:auto;padding:8px 12px">
-        <span class="chip chip-line">${ICN.google}<span style="margin-left:2px">Conectado a Google Calendar</span></span>
+        <!-- Ícono de calendario, no el de Google: el feed sirve para cualquier
+             calendario y el logo sugeriría una integración con Google que no hay. -->
+        <span class="chip ${S.ics&&S.ics.conectado?'chip-ok':'chip-line'}">${ICN.calendar}<span style="margin-left:2px">${S.ics&&S.ics.conectado?'Agenda suscrita':'Sin suscribir'}</span></span>
         <button class="btn btn-primary" data-nueva-cita>${ICN.plus} Nueva cita</button>
       </div>
     </div>
@@ -585,6 +591,7 @@ function viewAgenda(){
         ${lista}
       </div>
       <div>
+        ${tarjetaICS()}
         <div class="card pad" style="margin-bottom:16px">
           <div class="section-title" style="margin-bottom:12px">Auto-agenda del paciente</div>
           <p class="lead" style="font-size:13px">El paciente reserva con tres datos —nombre, correo y teléfono— y recibe correo de confirmación automático.</p>
@@ -595,7 +602,7 @@ function viewAgenda(){
             <button class="btn btn-ghost" style="width:100%;justify-content:center">Enviar enlace de pre-registro</button>
           </div>
         </div>
-        <div class="note">${ICN.calendar}<div>Los asistentes pueden agendar en nombre del médico. Cada cita sincroniza con Google Calendar y dispara el correo de confirmación.</div></div>
+        <div class="note">${ICN.calendar}<div>La suscripción de calendario es de solo lectura y en un sentido: las citas se crean aquí y aparecen en tu calendario. Google refresca cada varias horas; el iPhone permite elegir el intervalo.</div></div>
       </div>
     </div>
     ${S.modalCita?modalNuevaCita():''}`;
@@ -687,6 +694,89 @@ async function cargarTratamientos(id){
     S.tratamientos = r.ok ? await r.json() : [];
   }catch(e){ S.tratamientos=[]; }
   S.tratamientosCargando=false; S.tratamientosCargados=true; render();
+}
+
+/* ---------------- SUSCRIPCIÓN ICS DE LA AGENDA ---------------- */
+// Enlace para suscribir la agenda a Google/iPhone/Outlook. Los eventos llevan
+// folio y enlace, no el nombre del paciente (ver src/ics.js); la bandera de
+// iniciales es una preferencia por médico, no una decisión del código.
+async function cargarICS(){
+  S.icsCargado=true;
+  try{
+    const r=await fetch('/api/ics',{credentials:'same-origin'});
+    S.ics = r.ok ? await r.json() : {conectado:false,url:null,iniciales:false};
+  }catch(e){ S.ics={conectado:false,url:null,iniciales:false}; }
+  render();
+}
+async function accionICS(ruta, cuerpo, msg){
+  S.icsMsg=''; render();
+  try{
+    const r=await fetch(ruta,{method:'POST',headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',body:JSON.stringify(cuerpo||{})});
+    if(!r.ok){ S.icsMsg='No se pudo completar la acción.'; render(); return; }
+    S.icsCargado=false; S.icsMsg=msg||'';
+    await cargarICS();
+  }catch(e){ S.icsMsg='No se pudo conectar con el servidor.'; render(); }
+}
+function copiarEnlaceICS(){
+  const el=document.querySelector('[data-ics-url]');
+  if(!el) return;
+  el.select(); el.setSelectionRange(0,99999);
+  const listo=()=>{ S.icsMsg='Enlace copiado.'; render(); };
+  // clipboard puede no existir fuera de HTTPS; execCommand queda de respaldo.
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(el.value).then(listo).catch(()=>{ try{document.execCommand('copy');listo();}catch(e){} });
+  } else { try{document.execCommand('copy');listo();}catch(e){} }
+}
+function tarjetaICS(){
+  const s=S.ics;
+  const cab=`<div class="section-title" style="margin-bottom:8px">Tu agenda en tu calendario</div>`;
+  if(!s) return `<div class="card pad" style="margin-bottom:16px">${cab}
+    <p class="lead" style="font-size:13px;margin:0">Cargando…</p></div>`;
+  const cuerpo = s.conectado
+    ? `<div class="field" style="margin-bottom:10px">
+         <input class="input mono" data-ics-url value="${esc(s.url)}" readonly style="font-size:11px">
+       </div>
+       <div style="display:flex;gap:8px;flex-wrap:wrap">
+         <button class="btn btn-primary" data-ics-copiar style="flex:1;justify-content:center">${ICN.check} Copiar enlace</button>
+         <button class="btn btn-ghost" data-ics-regenerar>Regenerar</button>
+         <button class="btn btn-ghost" data-ics-revocar>Revocar</button>
+       </div>
+       <label style="display:flex;align-items:center;gap:9px;margin-top:14px;font-size:12.5px;color:var(--slate);cursor:pointer">
+         <input type="checkbox" data-ics-iniciales ${s.iniciales?'checked':''}>
+         Incluir iniciales del paciente (ej. S.M.R.)
+       </label>`
+    : `<button class="btn btn-primary" data-ics-regenerar style="width:100%;justify-content:center">${ICN.plus} Generar enlace de suscripción</button>`;
+  return `<div class="card pad" style="margin-bottom:16px">${cab}
+    <p class="lead" style="font-size:13px;margin-bottom:12px">Suscríbela a Google Calendar, iPhone u Outlook. Los eventos llevan folio y enlace a Sherlock, <b>no el nombre del paciente</b>.</p>
+    ${cuerpo}
+    <div class="note" style="margin-top:14px">${ICN.lock}<div>Quien tenga el enlace ve tu agenda sin contraseña. No lo compartas; si se filtra, usa <b>Regenerar</b> y la suscripción anterior deja de servir.</div></div>
+    ${S.icsMsg?`<div style="margin-top:10px;font-size:12.5px;color:var(--petrol)">${esc(S.icsMsg)}</div>`:''}
+  </div>`;
+}
+
+// Enlace profundo del calendario: /?cita=<id> abre esa cita en el expediente.
+async function abrirCitaDeURL(){
+  const m=/[?&]cita=(\d+)/.exec(location.search||'');
+  if(!m) return false;
+  // La URL se limpia siempre que venía el parámetro, incluso si la cita no es
+  // accesible (p. ej. es de otro médico): recargar no debe reintentar en vano.
+  const limpiar=()=>{ if(history.replaceState) history.replaceState({}, '', location.pathname); };
+  try{
+    const r=await fetch(`/api/citas/${m[1]}`,{credentials:'same-origin'});
+    if(!r.ok){ limpiar(); return false; }
+    const c=await r.json();
+    if(c.inicio){
+      // Fecha LOCAL: recortar el ISO en UTC desplazaría el día en México.
+      const d=new Date(c.inicio), p=n=>String(n).padStart(2,'0');
+      S.citasFecha=`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+      S.citasCargadas=false;
+    }
+    if(c.paciente_id){ S.patient=String(c.paciente_id); S.tab='historia'; S.route='paciente'; }
+    else S.route='agenda';
+    limpiar();
+    return true;
+  }catch(e){ limpiar(); return false; }
 }
 
 /* ---------------- BUSCADOR GLOBAL ---------------- */
@@ -2285,6 +2375,13 @@ function bind(){
   // Informe médico: impresión nativa del navegador (solo el documento, vía @media print).
   document.querySelectorAll('[data-print]').forEach(el=>el.onclick=()=>window.print());
 
+  // Suscripción ICS: generar/regenerar, revocar, copiar y bandera de iniciales.
+  document.querySelectorAll('[data-ics-regenerar]').forEach(el=>el.onclick=()=>accionICS('/api/ics/regenerar',{},'Enlace generado.'));
+  document.querySelectorAll('[data-ics-revocar]').forEach(el=>el.onclick=()=>accionICS('/api/ics/revocar',{},'Enlace revocado.'));
+  document.querySelectorAll('[data-ics-copiar]').forEach(el=>el.onclick=()=>copiarEnlaceICS());
+  document.querySelectorAll('[data-ics-iniciales]').forEach(el=>el.onchange=()=>
+    accionICS('/api/ics/iniciales',{iniciales:el.checked}, el.checked?'Se incluirán las iniciales.':'Solo folio, sin iniciales.'));
+
   // Buscador global: sin render() al teclear, para no perder el foco (ver pintarPanel).
   const qIn=document.querySelector('[data-q]');
   if(qIn){
@@ -2304,6 +2401,8 @@ document.addEventListener('mousedown', (e)=>{
 });
 
 render();
+// Enlace del calendario: si la URL trae ?cita=, se abre esa cita al cargar.
+abrirCitaDeURL().then(hubo=>{ if(hubo) render(); });
 </script>
 </body>
 </html>

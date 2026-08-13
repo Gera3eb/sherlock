@@ -20,6 +20,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const pool = require('./src/db');
 const { audit } = require('./src/audit');
+const { construirICS } = require('./src/ics');
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3021', 10);
@@ -54,16 +55,35 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(A, B);
 }
 
+// Destino post-login. Solo se acepta una ruta LOCAL: sin esta validación,
+// /login?next=https://otro-sitio convertiría el login en un redirector abierto
+// para phishing. Se exige "/" inicial y se rechaza "//" y "/\", que los
+// navegadores interpretan como host externo.
+function destinoSeguro(v) {
+  const s = String(v || '');
+  if (!s.startsWith('/')) return null;
+  if (s.startsWith('//') || s.startsWith('/\\')) return null;
+  return s;
+}
+
 function requireAuth(req, res, next) {
   if (req.session && req.session.user) return next();
-  return res.redirect('/login');
+  // Se preserva el destino para que un enlace del calendario abra la cita y no
+  // la agenda de hoy después de iniciar sesión.
+  const next_ = destinoSeguro(req.originalUrl);
+  return res.redirect(next_ && next_ !== '/' ? `/login?next=${encodeURIComponent(next_)}` : '/login');
 }
 
 // Página de login (pública)
 app.get('/login', (req, res) => {
   if (req.session && req.session.user) return res.redirect('/');
-  res.set('Cache-Control', 'no-store');
-  res.sendFile(path.join(PUBLIC, 'login.html'));
+  // Se inyecta el destino en el formulario para que sobreviva al POST.
+  const destino = destinoSeguro(req.query.next) || '';
+  const seguro = destino.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const html = fs.readFileSync(path.join(PUBLIC, 'login.html'), 'utf8')
+                 .replace('/*__NEXT__*/', seguro);
+  res.set('Cache-Control', 'no-store').type('html').send(html);
 });
 
 // Validación de credenciales
@@ -71,11 +91,14 @@ app.post('/login', (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase();
   const password = String(req.body.password || '');
   const u = USERS.find(x => String(x.u).toLowerCase() === username);
+  const destino = destinoSeguro(req.body.next) || '/';
   if (u && safeEqual(u.p, password)) {
     req.session.user = { u: u.u, role: u.role, name: u.name, spec: u.spec };
-    return res.redirect('/');
+    return res.redirect(destino);
   }
-  return res.redirect('/login?e=1');
+  // El destino sobrevive al intento fallido, para no perderlo al equivocarse.
+  const q = destino !== '/' ? `&next=${encodeURIComponent(destino)}` : '';
+  return res.redirect(`/login?e=1${q}`);
 });
 
 app.get('/logout', (req, res) => {
@@ -634,6 +657,18 @@ app.post('/api/citas', requireAuth, ensureMedicoId, async (req, res) => {
   }
   if (!titulo) return res.status(400).json({ error: 'El título de la cita es obligatorio.' });
 
+  // Hora de término opcional; si no viene, el ICS aplica una duración por tipo.
+  let fin = null;
+  if (b.fin != null && b.fin !== '') {
+    if (isNaN(new Date(b.fin).getTime())) {
+      return res.status(400).json({ error: 'El campo "fin" no es una fecha/hora válida.' });
+    }
+    if (new Date(b.fin) <= new Date(inicio)) {
+      return res.status(400).json({ error: 'La hora de término debe ser posterior al inicio.' });
+    }
+    fin = String(b.fin);
+  }
+
   // paciente_id es opcional; si viene, debe ser entero y pertenecer al médico.
   let pacienteId = null;
   if (b.paciente_id != null && b.paciente_id !== '') {
@@ -650,10 +685,10 @@ app.post('/api/citas', requireAuth, ensureMedicoId, async (req, res) => {
       }
     }
     const { rows } = await pool.query(
-      `INSERT INTO sherlock.citas (medico_id, paciente_id, inicio, titulo, tipo, notas)
-       VALUES ($1, $2, $3::timestamptz, $4, $5, $6)
+      `INSERT INTO sherlock.citas (medico_id, paciente_id, inicio, fin, titulo, tipo, notas)
+       VALUES ($1, $2, $3::timestamptz, $4::timestamptz, $5, $6, $7)
        RETURNING *`,
-      [req.session.user.medico_id, pacienteId, inicio, titulo, b.tipo || null, b.notas || null]
+      [req.session.user.medico_id, pacienteId, inicio, fin, titulo, b.tipo || null, b.notas || null]
     );
     const cita = rows[0];
     await audit(req, 'crear', 'cita', cita.id, { titulo: cita.titulo });
@@ -693,6 +728,151 @@ function sinAcentos(s) {
 const ACENTUADAS = 'áéíóúüñÁÉÍÓÚÜÑ';
 const LLANAS     = 'aeiouunAEIOUUN';
 const sqlSinAcentos = (col) => `translate(${col}, '${ACENTUADAS}', '${LLANAS}')`;
+
+// --- Suscripción de agenda por iCalendar (ICS) ---
+
+// URL pública con la que se arman los enlaces del calendario. Se toma de
+// PUBLIC_URL porque el feed lo descarga Google, no el navegador del médico:
+// derivarla de la cabecera Host dejaría que un tercero fabricara enlaces.
+function urlBase(req) {
+  const cfg = String(process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '');
+  if (cfg) return cfg;
+  return `${req.protocol}://${req.get('host')}`;
+}
+
+// Ventana publicada: dos meses atrás y un año adelante. Publicar el historial
+// completo engordaría el feed sin que nadie lo mire.
+const ICS_DIAS_ATRAS = 60;
+const ICS_DIAS_ADELANTE = 365;
+
+// Feed ICS — PÚBLICO por necesidad: Google lo descarga sin sesión. La URL es la
+// credencial, por eso el token es de 32 bytes aleatorios y se puede regenerar.
+app.get('/agenda.ics', async (req, res) => {
+  const token = String(req.query.token || '').trim();
+  if (!token) return res.status(404).type('text').send('No encontrado.');
+  try {
+    const { rows: meds } = await pool.query(
+      'SELECT id, nombre, ics_iniciales FROM sherlock.medicos WHERE ics_token = $1',
+      [token]
+    );
+    // Mismo 404 que sin token: no se confirma si un token existió alguna vez.
+    if (!meds.length) return res.status(404).type('text').send('No encontrado.');
+    const medico = meds[0];
+
+    const { rows: citas } = await pool.query(
+      `SELECT c.id, c.inicio, c.fin, c.tipo, c.paciente_id, p.nombre AS paciente_nombre
+         FROM sherlock.citas c
+         LEFT JOIN sherlock.pacientes p
+                ON p.id = c.paciente_id AND p.medico_id = c.medico_id
+        WHERE c.medico_id = $1
+          AND c.inicio >= now() - ($2 || ' days')::interval
+          AND c.inicio <= now() + ($3 || ' days')::interval
+        ORDER BY c.inicio ASC`,
+      [medico.id, ICS_DIAS_ATRAS, ICS_DIAS_ADELANTE]
+    );
+
+    const ics = construirICS(citas, {
+      nombreCal: `Agenda · ${medico.nombre || 'Sherlock'}`,
+      base: urlBase(req),
+      iniciales: medico.ics_iniciales === true,
+    });
+
+    // Queda en bitácora: es acceso a datos de agenda, aunque venga sin sesión.
+    await audit(
+      { session: { user: { u: 'ics:feed', medico_id: medico.id } }, ip: req.ip },
+      'ver', 'agenda_ics', medico.id, { citas: citas.length }
+    );
+
+    res.set('Cache-Control', 'no-store')
+       .type('text/calendar; charset=utf-8')
+       .send(ics);
+  } catch (e) {
+    console.error('[GET /agenda.ics]', e.message);
+    res.status(500).type('text').send('No se pudo generar el calendario.');
+  }
+});
+
+// Estado del enlace de suscripción del médico en sesión.
+app.get('/api/ics', requireAuth, ensureMedicoId, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT ics_token, ics_iniciales FROM sherlock.medicos WHERE id = $1',
+      [req.session.user.medico_id]
+    );
+    const m = rows[0] || {};
+    res.json({
+      conectado: !!m.ics_token,
+      url: m.ics_token ? `${urlBase(req)}/agenda.ics?token=${m.ics_token}` : null,
+      iniciales: m.ics_iniciales === true,
+    });
+  } catch (e) {
+    console.error('[GET /api/ics]', e.message);
+    res.status(500).json({ error: 'No se pudo obtener el enlace de calendario.' });
+  }
+});
+
+// Genera o REGENERA el token. Regenerar es la vía de revocación: la suscripción
+// anterior deja de funcionar, que es lo que se necesita si el enlace se filtró.
+app.post('/api/ics/regenerar', requireAuth, ensureMedicoId, async (req, res) => {
+  try {
+    const token = crypto.randomBytes(32).toString('base64url');
+    await pool.query('UPDATE sherlock.medicos SET ics_token = $1 WHERE id = $2',
+      [token, req.session.user.medico_id]);
+    await audit(req, 'regenerar', 'agenda_ics', req.session.user.medico_id);
+    res.json({ conectado: true, url: `${urlBase(req)}/agenda.ics?token=${token}` });
+  } catch (e) {
+    console.error('[POST /api/ics/regenerar]', e.message);
+    res.status(500).json({ error: 'No se pudo generar el enlace.' });
+  }
+});
+
+// Revoca el enlace sin generar otro.
+app.post('/api/ics/revocar', requireAuth, ensureMedicoId, async (req, res) => {
+  try {
+    await pool.query('UPDATE sherlock.medicos SET ics_token = NULL WHERE id = $1',
+      [req.session.user.medico_id]);
+    await audit(req, 'revocar', 'agenda_ics', req.session.user.medico_id);
+    res.json({ conectado: false, url: null });
+  } catch (e) {
+    console.error('[POST /api/ics/revocar]', e.message);
+    res.status(500).json({ error: 'No se pudo revocar el enlace.' });
+  }
+});
+
+// Bandera de iniciales: por omisión el evento lleva solo el folio; activarla
+// agrega las iniciales del paciente. Es decisión del cliente, no del código.
+app.post('/api/ics/iniciales', requireAuth, ensureMedicoId, async (req, res) => {
+  try {
+    const valor = req.body && req.body.iniciales === true;
+    await pool.query('UPDATE sherlock.medicos SET ics_iniciales = $1 WHERE id = $2',
+      [valor, req.session.user.medico_id]);
+    await audit(req, 'configurar', 'agenda_ics', req.session.user.medico_id, { iniciales: valor });
+    res.json({ iniciales: valor });
+  } catch (e) {
+    console.error('[POST /api/ics/iniciales]', e.message);
+    res.status(500).json({ error: 'No se pudo guardar la preferencia.' });
+  }
+});
+
+// Una cita del médico en sesión — la usa el enlace profundo del calendario para
+// saber a qué paciente y a qué fecha llevar.
+app.get('/api/citas/:id', requireAuth, ensureMedicoId, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de cita no es válido.' });
+  try {
+    const { rows } = await pool.query(
+      `SELECT c.id, c.inicio, c.fin, c.titulo, c.tipo, c.notas, c.paciente_id
+         FROM sherlock.citas c
+        WHERE c.id = $1 AND c.medico_id = $2`,
+      [id, req.session.user.medico_id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Cita no encontrada o no pertenece a este médico.' });
+    res.json(rows[0]);
+  } catch (e) {
+    console.error('[GET /api/citas/:id]', e.message);
+    res.status(500).json({ error: 'No se pudo obtener la cita.' });
+  }
+});
 
 // Búsqueda global del médico en sesión: pacientes, diagnósticos y estudios.
 // El aislamiento se mantiene igual que en el resto de la API: pacientes filtra por

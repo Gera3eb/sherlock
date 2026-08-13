@@ -13,7 +13,11 @@ CREATE TABLE IF NOT EXISTS sherlock.medicos (
   username      text UNIQUE,
   nombre        text,
   especialidad  text,
-  rol           text
+  rol           text,
+  -- Suscripción ICS de la agenda (ver migración 007). El token es la credencial
+  -- del feed; ics_iniciales decide si el evento lleva iniciales además del folio.
+  ics_token     text,
+  ics_iniciales boolean DEFAULT false
 );
 
 -- Pacientes (cada paciente pertenece a un médico)
@@ -37,6 +41,7 @@ CREATE TABLE IF NOT EXISTS sherlock.citas (
   medico_id    int,
   paciente_id  int REFERENCES sherlock.pacientes(id),
   inicio       timestamptz,
+  fin          timestamptz,
   titulo       text,
   tipo         text,
   notas        text
@@ -144,5 +149,6 @@ CREATE INDEX IF NOT EXISTS idx_auditoria_entidad ON sherlock.auditoria (entidad,
 CREATE INDEX IF NOT EXISTS idx_pacientes_medico  ON sherlock.pacientes (medico_id);
 CREATE INDEX IF NOT EXISTS idx_notas_paciente        ON sherlock.notas_evolucion (paciente_id);
 CREATE INDEX IF NOT EXISTS idx_notas_corrige_a       ON sherlock.notas_evolucion (corrige_a);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_medicos_ics_token ON sherlock.medicos (ics_token) WHERE ics_token IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tratamientos_paciente ON sherlock.tratamientos (paciente_id);
 CREATE INDEX IF NOT EXISTS idx_ciclos_tratamiento    ON sherlock.ciclos (tratamiento_id);

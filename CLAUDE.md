@@ -73,7 +73,7 @@ node seed.js       # médicos siempre; pacientes/citas solo si la tabla está va
 
 ## Rutas
 Públicas: `GET /login` · `POST /login` (valida contra `USERS` del `.env`) · `GET /logout` ·
-`GET /healthz`.
+`GET /healthz` · `GET /agenda.ics?token=` (feed de calendario; ver abajo).
 
 Protegidas (`requireAuth`); las de datos además pasan por `ensureMedicoId` y filtran por
 `medico_id`:
@@ -85,7 +85,9 @@ Protegidas (`requireAuth`); las de datos además pasan por `ensureMedicoId` y fi
   `POST /api/notas/:notaId/correccion` ·
   `GET|POST /api/pacientes/:id/tratamientos` · `POST /api/tratamientos/:tratId/ciclos` ·
   `DELETE /api/tratamientos/:tratId/ciclos/:cicloId`
-- Agenda: `GET|POST /api/citas` · `DELETE /api/citas/:id`
+- Agenda: `GET|POST /api/citas` · `GET /api/citas/:id` · `DELETE /api/citas/:id`
+- Calendario: `GET /api/ics` · `POST /api/ics/regenerar` · `POST /api/ics/revocar` ·
+  `POST /api/ics/iniciales`
 - Búsqueda: `GET /api/buscar?q=` (pacientes, diagnósticos y estudios; mínimo 2 caracteres)
 
 ## .env (cada servidor el suyo, nunca en el repo)
@@ -144,6 +146,30 @@ Reglas que no hay que romper:
 - **Quien consuma la nota debe usar la versión vigente**, no la original. En el front eso es
   `notaEfectiva()`; Exploración la usa para no calcular BSA/IMC sobre un peso ya corregido.
 
+### Suscripción de agenda por ICS
+Cada médico genera un enlace (`GET /agenda.ics?token=`) y lo suscribe al calendario que
+prefiera. Se eligió esto sobre la API de Google: sin proyecto en Google Cloud, sin
+verificación —que para una cuenta de Gmail personal tarda semanas— y sirve igual para
+iPhone y Outlook. A cambio, Google refresca el feed cada varias horas: es de solo lectura,
+en un sentido y **no es tiempo real**. Conviene decírselo al cliente en esos términos.
+
+Reglas que no hay que romper:
+- **Lista blanca de campos en el evento** (`src/ics.js`). Solo tipo derivado, folio, fecha y
+  enlace. NUNCA `citas.titulo` (el front lo autogenera como "Quimioterapia - <nombre>") ni
+  `citas.notas` (texto libre del asistente). Volcar texto libre ahí anula todo el diseño:
+  el feed viaja a un tercero y su URL no tiene login.
+- **La URL es la credencial.** Token de 32 bytes, único e indexado; `Regenerar` es la vía de
+  revocación. Un token inválido devuelve el mismo 404 que uno inexistente.
+- **La bandera `ics_iniciales`** agrega "S.M.R." al evento; por omisión va apagada y solo
+  viaja el folio. Es decisión del cliente, por eso se guarda por médico.
+- **ICS es formato estricto**: CRLF, plegado a 75 **octetos** sin partir caracteres UTF-8,
+  escapado de `\ ; ,` y saltos, y `UID` estable por cita — si el UID cambiara, cada refresco
+  duplicaría los eventos. Todo eso está probado en `src/ics.js`.
+
+El enlace del evento apunta a `/?cita=<id>`. Para que funcione desde el teléfono, `requireAuth`
+conserva el destino en `?next=` y `POST /login` lo restaura — validando que sea una ruta
+**local**, o el login se volvería un redirector abierto para phishing.
+
 ### Buscador global
 `GET /api/buscar` busca en pacientes, diagnósticos y estudios, todo acotado por `medico_id`
 (diagnósticos y estudios lo alcanzan por JOIN a pacientes). Dos cosas que no hay que perder
@@ -176,11 +202,10 @@ solo, sobre `#q-panel` (ver `pintarPanel()`).
   `ssl.rejectUnauthorized:false` en `src/db.js`.
 - La vista **Seguridad** describe objetivos de diseño (cifrado en reposo, marca de agua,
   respaldo cifrado), no funcionalidad entregada. Cuidar cómo se presenta al cliente.
-- La **Agenda** muestra un chip "Conectado a Google Calendar", una tarjeta de "Auto-agenda
-  del paciente" con botón de pre-registro, y una nota que afirma que cada cita sincroniza y
-  dispara correo de confirmación. **No existe nada de eso**: no hay integración con Google
-  ni envío de correo en el servidor. A diferencia de la vista Seguridad, aquí está redactado
-  como un hecho ("Conectado a"), así que un médico lo va a leer como entregado.
+- La tarjeta **"Auto-agenda del paciente"** de la Agenda sigue siendo maqueta: el paciente no
+  puede reservar y no hay envío de correo en el servidor. (El chip falso de Google Calendar
+  y la nota que prometía sincronización y correo ya se reemplazaron por la suscripción ICS,
+  que sí funciona.)
 
 ## Notas
 - `app.set('trust proxy',1)` ya está (va detrás de Nginx). Cookie `secure` con `COOKIE_SECURE=1`.
