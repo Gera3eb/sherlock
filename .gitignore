@@ -1,5 +1,7 @@
 .env
 .env.*
+# Excepción: la plantilla SÍ va al repo (no contiene secretos, solo el formato).
+!.env.example
 node_modules/
 data.json
 dist/

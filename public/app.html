@@ -54,9 +54,15 @@ a{color:var(--petrol);text-decoration:none}
 
 .main{display:flex;flex-direction:column;min-width:0}
 .topbar{height:62px;background:rgba(255,255,255,.86);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:16px;padding:0 26px;position:sticky;top:0;z-index:30}
-.searchbox{flex:1;max-width:380px;display:flex;align-items:center;gap:9px;background:var(--mist);border:1px solid var(--line);border-radius:11px;padding:8.5px 13px;color:var(--muted)}
+.searchbox{position:relative;flex:1;max-width:380px;display:flex;align-items:center;gap:9px;background:var(--mist);border:1px solid var(--line);border-radius:11px;padding:8.5px 13px;color:var(--muted)}
 .searchbox svg{width:15px;height:15px}
 .searchbox input{border:none;background:none;outline:none;flex:1;color:var(--ink)}
+/* Panel de resultados del buscador: cuelga del searchbox, por encima del topbar. */
+#q-panel{position:absolute;top:calc(100% + 7px);left:0;right:0;background:var(--paper);border:1px solid var(--line);border-radius:11px;box-shadow:var(--sh-2);z-index:60;max-height:min(60vh,420px);overflow:auto;padding:6px}
+.q-grp{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--slate);padding:9px 15px 4px}
+.q-row{display:block;width:100%;text-align:left;background:none;border:none;font:inherit;cursor:pointer;padding:9px 15px;border-radius:8px}
+.q-row:hover{background:var(--mist)}
+.q-msg{padding:13px 15px;color:var(--muted);font-size:12.5px}
 .role-toggle{display:flex;background:var(--mist);border:1px solid var(--line);border-radius:10px;padding:3px}
 .role-toggle button{padding:6px 13px;border-radius:7px;font-size:12.5px;font-weight:600;color:var(--slate)}
 .role-toggle button.on{background:#fff;color:var(--petrol);box-shadow:var(--sh-1)}
@@ -379,6 +385,11 @@ if(__USER__ && __USER__.role && DOCTORS[__USER__.role]){
 const S={
   route:'agenda', doc:(__USER__&&__USER__.role&&DOCTORS[__USER__.role])?__USER__.role:'soto', role:'medico', patient:'sara', tab:'historia',
   ipadStep:0,
+  // --- Suscripción ICS de la agenda (API real) ---
+  ics:null, icsCargado:false, icsMsg:'',
+  // --- Buscador global (API real) ---
+  // q vive fuera del ciclo de render: el panel se repinta solo (ver pintarPanel).
+  q:'', qRes:null, qCargando:false, qAbierto:false,
   // --- Agenda / citas (API real) ---
   // agendaVista: rubro mostrado en la agenda ('consultas' por defecto | 'quimio').
   citas:[], citasCargadas:false, citasFecha:hoyISO(), agendaVista:'consultas',
@@ -399,6 +410,8 @@ const S={
   modalNota:false, notaForm:null, notaGuardando:false, notaError:'',
   modalTrat:false, tratForm:null, tratGuardando:false, tratError:'',
   modalCiclo:false, cicloForm:null, cicloGuardando:false, cicloError:'',
+  // Corrección de una nota (addendum: no sobrescribe, agrega — ver migración 006).
+  modalCorr:false, corrForm:null, corrGuardando:false, corrError:'',
   antForm:null, antGuardando:false, antMsg:'',
   estudForm:null, estudGuardando:false, estudMsg:'', estudAbierto:false,
   npForm:{ nombre:'', sexo:'F', fecha_nacimiento:'', telefono:'', correo:'', seguro:'', dx_resumen:'' },
@@ -445,7 +458,8 @@ function shell(content){
     </aside>
     <main class="main">
       <div class="topbar">
-        <div class="searchbox">${ICN.glass}<input placeholder="Buscar paciente, diagnóstico o estudio…"></div>
+        <div class="searchbox">${ICN.glass}<input data-q value="${esc(S.q)}" placeholder="Buscar paciente, diagnóstico o estudio…" autocomplete="off" spellcheck="false">
+          <div id="q-panel" style="display:none"></div></div>
         <div style="flex:1"></div>
         <div class="role-toggle">
           <button class="${S.role==='medico'?'on':''}" data-role="medico">Médico</button>
@@ -514,6 +528,8 @@ function fechaLargaES(iso){
 function viewAgenda(){
   // Carga una sola vez por fecha al entrar a la vista.
   if(!S.citasCargadas){ cargarCitas(S.citasFecha); }
+  // Estado del enlace de suscripción: una sola vez por sesión de vista.
+  if(!S.icsCargado){ cargarICS(); }
   const citas=S.citas||[];
   // Dos rubros únicos: Quimioterapia y Consultas (todo lo demás).
   const quimio   = citas.filter(esCitaQuimio);
@@ -552,7 +568,9 @@ function viewAgenda(){
       </div>
       <div style="display:flex;gap:10px;align-items:center">
         <input class="input" type="date" data-citas-fecha value="${esc(S.citasFecha)}" style="width:auto;padding:8px 12px">
-        <span class="chip chip-line">${ICN.google}<span style="margin-left:2px">Conectado a Google Calendar</span></span>
+        <!-- Ícono de calendario, no el de Google: el feed sirve para cualquier
+             calendario y el logo sugeriría una integración con Google que no hay. -->
+        <span class="chip ${S.ics&&S.ics.conectado?'chip-ok':'chip-line'}">${ICN.calendar}<span style="margin-left:2px">${S.ics&&S.ics.conectado?'Agenda suscrita':'Sin suscribir'}</span></span>
         <button class="btn btn-primary" data-nueva-cita>${ICN.plus} Nueva cita</button>
       </div>
     </div>
@@ -573,6 +591,7 @@ function viewAgenda(){
         ${lista}
       </div>
       <div>
+        ${tarjetaICS()}
         <div class="card pad" style="margin-bottom:16px">
           <div class="section-title" style="margin-bottom:12px">Auto-agenda del paciente</div>
           <p class="lead" style="font-size:13px">El paciente reserva con tres datos —nombre, correo y teléfono— y recibe correo de confirmación automático.</p>
@@ -583,7 +602,7 @@ function viewAgenda(){
             <button class="btn btn-ghost" style="width:100%;justify-content:center">Enviar enlace de pre-registro</button>
           </div>
         </div>
-        <div class="note">${ICN.calendar}<div>Los asistentes pueden agendar en nombre del médico. Cada cita sincroniza con Google Calendar y dispara el correo de confirmación.</div></div>
+        <div class="note">${ICN.calendar}<div>La suscripción de calendario es de solo lectura y en un sentido: las citas se crean aquí y aparecen en tu calendario. Google refresca cada varias horas; el iPhone permite elegir el intervalo.</div></div>
       </div>
     </div>
     ${S.modalCita?modalNuevaCita():''}`;
@@ -675,6 +694,173 @@ async function cargarTratamientos(id){
     S.tratamientos = r.ok ? await r.json() : [];
   }catch(e){ S.tratamientos=[]; }
   S.tratamientosCargando=false; S.tratamientosCargados=true; render();
+}
+
+/* ---------------- SUSCRIPCIÓN ICS DE LA AGENDA ---------------- */
+// Enlace para suscribir la agenda a Google/iPhone/Outlook. Los eventos llevan
+// folio y enlace, no el nombre del paciente (ver src/ics.js); la bandera de
+// iniciales es una preferencia por médico, no una decisión del código.
+async function cargarICS(){
+  S.icsCargado=true;
+  try{
+    const r=await fetch('/api/ics',{credentials:'same-origin'});
+    S.ics = r.ok ? await r.json() : {conectado:false,url:null,iniciales:false};
+  }catch(e){ S.ics={conectado:false,url:null,iniciales:false}; }
+  render();
+}
+async function accionICS(ruta, cuerpo, msg){
+  S.icsMsg=''; render();
+  try{
+    const r=await fetch(ruta,{method:'POST',headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',body:JSON.stringify(cuerpo||{})});
+    if(!r.ok){ S.icsMsg='No se pudo completar la acción.'; render(); return; }
+    S.icsCargado=false; S.icsMsg=msg||'';
+    await cargarICS();
+  }catch(e){ S.icsMsg='No se pudo conectar con el servidor.'; render(); }
+}
+function copiarEnlaceICS(){
+  const el=document.querySelector('[data-ics-url]');
+  if(!el) return;
+  el.select(); el.setSelectionRange(0,99999);
+  const listo=()=>{ S.icsMsg='Enlace copiado.'; render(); };
+  // clipboard puede no existir fuera de HTTPS; execCommand queda de respaldo.
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(el.value).then(listo).catch(()=>{ try{document.execCommand('copy');listo();}catch(e){} });
+  } else { try{document.execCommand('copy');listo();}catch(e){} }
+}
+// Mismo feed, distinto esquema: webcal:// hace que iOS abra la app Calendario y
+// ofrezca suscribirse de un toque, en vez de copiar la URL y navegar Ajustes.
+// Los dos médicos usan iPhone; en Outlook y Google el enlace funciona igual.
+function urlWebcal(u){ return String(u||'').replace(/^https?:\/\//i, 'webcal://'); }
+
+function tarjetaICS(){
+  const s=S.ics;
+  const cab=`<div class="section-title" style="margin-bottom:8px">Tu agenda en tu calendario</div>`;
+  if(!s) return `<div class="card pad" style="margin-bottom:16px">${cab}
+    <p class="lead" style="font-size:13px;margin:0">Cargando…</p></div>`;
+  const cuerpo = s.conectado
+    ? `<div class="field" style="margin-bottom:10px">
+         <input class="input mono" data-ics-url value="${esc(s.url)}" readonly style="font-size:11px">
+       </div>
+       <a class="btn btn-primary" href="${esc(urlWebcal(s.url))}" style="width:100%;justify-content:center;text-decoration:none;margin-bottom:8px">${ICN.calendar} Suscribir en iPhone</a>
+       <div style="display:flex;gap:8px;flex-wrap:wrap">
+         <button class="btn btn-ghost" data-ics-copiar style="flex:1;justify-content:center">${ICN.check} Copiar enlace</button>
+         <button class="btn btn-ghost" data-ics-regenerar>Regenerar</button>
+         <button class="btn btn-ghost" data-ics-revocar>Revocar</button>
+       </div>
+       <div style="margin-top:10px;font-size:11.5px;color:var(--muted);line-height:1.5">Ábrelo desde el iPhone. Para que refresque cada 5 minutos:
+         Ajustes › Calendario › Cuentas › Calendarios suscritos › este calendario › Frecuencia de actualización.</div>
+       <label style="display:flex;align-items:center;gap:9px;margin-top:14px;font-size:12.5px;color:var(--slate);cursor:pointer">
+         <input type="checkbox" data-ics-iniciales ${s.iniciales?'checked':''}>
+         Incluir iniciales del paciente (ej. S.M.R.)
+       </label>`
+    : `<button class="btn btn-primary" data-ics-regenerar style="width:100%;justify-content:center">${ICN.plus} Generar enlace de suscripción</button>`;
+  return `<div class="card pad" style="margin-bottom:16px">${cab}
+    <p class="lead" style="font-size:13px;margin-bottom:12px">Suscríbela a Google Calendar, iPhone u Outlook. Los eventos llevan folio y enlace a Sherlock, <b>no el nombre del paciente</b>.</p>
+    ${cuerpo}
+    <div class="note" style="margin-top:14px">${ICN.lock}<div>Quien tenga el enlace ve tu agenda sin contraseña. No lo compartas; si se filtra, usa <b>Regenerar</b> y la suscripción anterior deja de servir.</div></div>
+    ${S.icsMsg?`<div style="margin-top:10px;font-size:12.5px;color:var(--petrol)">${esc(S.icsMsg)}</div>`:''}
+  </div>`;
+}
+
+// Enlace profundo del calendario: /?cita=<id> abre esa cita en el expediente.
+async function abrirCitaDeURL(){
+  const m=/[?&]cita=(\d+)/.exec(location.search||'');
+  if(!m) return false;
+  // La URL se limpia siempre que venía el parámetro, incluso si la cita no es
+  // accesible (p. ej. es de otro médico): recargar no debe reintentar en vano.
+  const limpiar=()=>{ if(history.replaceState) history.replaceState({}, '', location.pathname); };
+  try{
+    const r=await fetch(`/api/citas/${m[1]}`,{credentials:'same-origin'});
+    if(!r.ok){ limpiar(); return false; }
+    const c=await r.json();
+    if(c.inicio){
+      // Fecha LOCAL: recortar el ISO en UTC desplazaría el día en México.
+      const d=new Date(c.inicio), p=n=>String(n).padStart(2,'0');
+      S.citasFecha=`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+      S.citasCargadas=false;
+    }
+    if(c.paciente_id){ S.patient=String(c.paciente_id); S.tab='historia'; S.route='paciente'; }
+    else S.route='agenda';
+    limpiar();
+    return true;
+  }catch(e){ limpiar(); return false; }
+}
+
+/* ---------------- BUSCADOR GLOBAL ---------------- */
+// Es el único punto de la app que NO pasa por render(): un re-render reconstruye
+// el topbar y con él el input, así que se perdería el foco y el cursor en cada
+// tecla. Por eso el panel de resultados se pinta a mano sobre #q-panel.
+let qTimer=null;
+
+function pintarPanel(){
+  const el=document.getElementById('q-panel');
+  if(!el) return;
+  el.style.display = S.qAbierto ? 'block' : 'none';
+  el.innerHTML = S.qAbierto ? panelBusqueda() : '';
+  // Los resultados nacen fuera de bind(), así que se enlazan aquí mismo.
+  el.querySelectorAll('[data-qgo]').forEach(b=>b.onclick=()=>
+    irAResultado(b.getAttribute('data-qgo'), b.getAttribute('data-qtab')));
+}
+
+// Resultados agrupados; cada renglón abre el expediente en la pestaña que le toca.
+function panelBusqueda(){
+  if(S.qCargando) return `<div class="q-msg">Buscando…</div>`;
+  const r=S.qRes;
+  if(!r) return '';
+  const pac=r.pacientes||[], dx=r.diagnosticos||[], est=r.estudios||[];
+  if(!pac.length && !dx.length && !est.length)
+    return `<div class="q-msg">Sin resultados para “${esc(S.q.trim())}”.</div>`;
+
+  const fila=(pid,tab,titulo,sub)=>`<button class="q-row" data-qgo="${esc(pid)}" data-qtab="${tab}">
+    <div style="font-size:13px;color:var(--ink);font-weight:600">${titulo}</div>
+    ${sub?`<div style="font-size:11.5px;color:var(--muted);margin-top:2px">${sub}</div>`:''}</button>`;
+  const grupo=(titulo,filas)=> filas.length ? `<div class="q-grp">${titulo}</div>${filas.join('')}` : '';
+
+  return grupo('Pacientes', pac.map(p =>
+      fila(p.id, 'historia', esc(p.nombre||'—'), esc(p.dx_resumen||''))))
+    + grupo('Diagnósticos', dx.map(d => {
+        const t=[d.tipo_histologico,d.subtipo].filter(Boolean).join(' · ')||'Diagnóstico';
+        const e=d.etapa?` · Etapa ${esc(d.etapa)}`:'';
+        return fila(d.paciente_id, 'diagnostico', esc(t)+e, esc(d.paciente||''));
+      }))
+    + grupo('Estudios', est.map(s => {
+        const f=fechaDMY(s.fecha);
+        const sub=[s.paciente, f!=='—'?f:null].filter(Boolean).join(' · ');
+        return fila(s.paciente_id, 'estudios', esc(s.descripcion||s.categoria||'Estudio'), esc(sub));
+      }));
+}
+
+function irAResultado(pid, tab){
+  S.patient=String(pid); S.tab=tab||'historia';
+  S.q=''; S.qRes=null; S.qAbierto=false; S.qCargando=false;
+  if(qTimer){ clearTimeout(qTimer); qTimer=null; }
+  go('paciente');   // render completo: el buscador queda limpio y el expediente abierto
+}
+
+// Cada tecla reprograma la consulta (250 ms) en vez de disparar una por letra.
+function alTeclearBusqueda(v){
+  S.q=v;
+  if(qTimer) clearTimeout(qTimer);
+  const q=v.trim();
+  if(q.length<2){ S.qRes=null; S.qCargando=false; S.qAbierto=false; pintarPanel(); return; }
+  S.qAbierto=true; S.qCargando=true; pintarPanel();
+  qTimer=setTimeout(()=>buscar(q), 250);
+}
+
+async function buscar(q){
+  const vacio={pacientes:[],diagnosticos:[],estudios:[]};
+  try{
+    const r=await fetch(`/api/buscar?q=${encodeURIComponent(q)}`,{credentials:'same-origin'});
+    // Respuesta rezagada: si el texto ya cambió, otra consulta viene en camino y
+    // pintar ésta haría parpadear resultados que ya no corresponden a lo tecleado.
+    if(S.q.trim()!==q) return;
+    S.qRes = r.ok ? await r.json() : vacio;
+  }catch(e){
+    if(S.q.trim()!==q) return;
+    S.qRes=vacio;
+  }
+  S.qCargando=false; pintarPanel();
 }
 
 // Siembra S.stage / S.bio con el último diagnóstico guardado, para que el motor
@@ -1204,7 +1390,137 @@ function tabHistoria(p){
 }
 
 /* ---- Exploración / signos vitales ---- */
+/* ---- Exploración física ---- */
+// Peso y talla se capturan como TEXTO libre en la nota de evolución ("65.850",
+// "72 kg", "1.76", "162 cm"): se toma el primer número y se ignora el resto.
+// Devuelve null si no hay número o no es positivo — nunca un valor inventado.
+function numDeTexto(v){
+  if(v==null) return null;
+  const m=/\d+(?:[.,]\d+)?/.exec(String(v));
+  if(!m) return null;
+  const n=parseFloat(m[0].replace(',','.'));
+  return (isFinite(n) && n>0) ? n : null;
+}
+// Talla a centímetros: el modal la pide en metros ("1.76") pero el médico puede
+// escribirla en cm ("162"). Se decide por magnitud — ninguna talla llega a 3 m.
+function tallaACm(v){
+  const n=numDeTexto(v);
+  if(n==null) return null;
+  return n<3 ? n*100 : n;
+}
+// Clasificación del IMC (OMS), para no rotular "normal" a ciegas.
+function clasifIMC(imc){
+  if(imc<18.5) return 'bajo peso';
+  if(imc<25)   return 'normal';
+  if(imc<30)   return 'sobrepeso';
+  return 'obesidad';
+}
+
+// Exploración física del paciente real: signos vitales de la nota MÁS RECIENTE y
+// antropometría derivada de ese peso/talla verdaderos.
+//
+// Es una vista de SOLO LECTURA a propósito. La captura de signos vitales ya vive
+// en el modal de nota de evolución, así que aquí se reusa ese mismo modal con
+// "Registrar nueva medición": un único camino de escritura hacia notas_evolucion
+// y, por tanto, una sola versión de cada consulta. Lo propio de esta pestaña son
+// las calculadoras (BSA e IMC), que alimentan la dosificación.
+function tabExploracionReal(){
+  const listas = S.notasCargadas && S.notasFor===String(S.patient);
+  if(!listas) return `<div class="card pad"><p class="lead" style="margin:0">Cargando…</p></div>`;
+
+  const btn=`<button class="btn btn-primary" data-evol-nota style="padding:8px 14px">${ICN.plus} Registrar nueva medición</button>`;
+  // Visita más reciente, en su versión VIGENTE: si la nota fue corregida, aquí
+  // manda la corrección — sería grave calcular la dosis sobre un peso corregido.
+  const grupos=notasAgrupadas(S.notas);
+  const g=grupos[0]||null;
+  const n=g?notaEfectiva(g):null;
+  const fueCorregida=!!(g && g.correcciones.length);
+
+  // Sin notas todavía: no hay nada que medir ni que calcular.
+  if(!n) return `<div class="card pad">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+        <div>
+          <div class="section-title" style="margin:0 0 6px">Signos vitales</div>
+          <p class="lead" style="margin:0;font-size:13px">Sin mediciones registradas. Los signos vitales se toman al registrar una nota de evolución.</p>
+        </div>${btn}
+      </div>
+    </div>
+    ${S.modalNota?modalNuevaNota():''}`;
+
+  const pesoKg=numDeTexto(n.peso);
+  const tallaCm=tallaACm(n.talla);
+  const puede=(pesoKg!=null && tallaCm!=null);
+  const bsaMost = puede ? Math.sqrt((tallaCm*pesoKg)/3600) : null;
+  const bsaDu   = puede ? 0.007184*Math.pow(tallaCm,0.725)*Math.pow(pesoKg,0.425) : null;
+  const imc     = puede ? pesoKg/Math.pow(tallaCm/100,2) : null;
+
+  // Renglón de signo vital: valor tal como lo capturó el médico, "—" si no lo registró.
+  const fila=(label,val,unidad,rango)=>{
+    const hay = (val!=null && String(val).trim()!=='');
+    return `<div class="vital">
+      <div class="vl">${label}</div>
+      <div style="text-align:center;font-weight:600;font-size:14.5px;color:${hay?'var(--ink)':'var(--muted)'}">${hay?esc(val):'—'}</div>
+      <div class="vr">${unidad}${rango?` · <span style="color:var(--ok)">${rango}</span>`:''}</div></div>`;
+  };
+
+  // Tarjeta de reemplazo cuando falta el dato de origen: se dice qué falta en vez
+  // de calcular sobre un supuesto.
+  const faltantes=[pesoKg==null?'el peso':null, tallaCm==null?'la talla':null].filter(Boolean).join(' ni ');
+  const sinDato=(titulo)=>`<div class="card pad" style="margin-bottom:12px">
+    <div class="section-title" style="margin:0 0 6px">${titulo}</div>
+    <p class="lead" style="margin:0;font-size:12.5px">No se puede calcular: la última nota no registra ${faltantes}.</p></div>`;
+
+  const calcBSA = puede
+    ? `<div class="calc-card" style="margin-bottom:12px">
+        <div class="cl">Superficie corporal (BSA)</div>
+        <div class="cv">${bsaMost.toFixed(2)} <span style="font-size:15px;color:#8FBDBC">m²</span></div>
+        <div class="cf">Mosteller · √(talla×peso/3600)</div>
+        <div class="cf">Du Bois: ${bsaDu.toFixed(2)} m²</div>
+      </div>`
+    : sinDato('Superficie corporal (BSA)');
+
+  const calcIMC = puede
+    ? `<div class="calc-card" style="background:linear-gradient(160deg,#9A6A24,#7c5419);margin-bottom:12px">
+        <div class="cl" style="color:#F0DDBE">Índice de masa corporal</div>
+        <div class="cv">${imc.toFixed(1)}</div>
+        <div class="cf" style="color:#F0DDBE">peso / talla² · ${clasifIMC(imc)}</div>
+      </div>`
+    : sinDato('Índice de masa corporal');
+
+  return `<div class="grid2" style="grid-template-columns:1.25fr .75fr;gap:22px">
+    <div class="card pad">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+        <div class="section-title" style="margin:0">Signos vitales</div>${btn}
+      </div>
+      <p class="lead" style="font-size:12.5px;margin-bottom:10px">Última medición registrada · ${esc(fechaHoraES(n.fecha_hora))}${fueCorregida?' <span class="chip chip-warn" style="font-size:10.5px">versión corregida</span>':''}</p>
+      ${fila('Frecuencia cardíaca',n.fc,'lpm','20–250')}
+      ${fila('Frecuencia respiratoria',n.fr,'rpm','8–40')}
+      ${fila('Temperatura',n.temperatura,'°C','35–41')}
+      ${fila('SatO₂',n.sato2,'%','30–100')}
+      ${fila('TA',n.ta,'mmHg','sist/diast')}
+      ${fila('Peso',n.peso,'kg','20–200')}
+      ${fila('Estatura',n.talla,'m','—')}
+    </div>
+    <div>
+      ${calcBSA}
+      ${calcIMC}
+      <div class="note">${ICN.target}<div><b>Dosificación.</b> La BSA alimenta el cálculo de dosis de quimioterapia; para carboplatino se integrará la fórmula de Calvert (AUC × [TFG + 25]).</div></div>
+    </div>
+  </div>
+  ${S.modalNota?modalNuevaNota():''}`;
+}
+
 function tabExploracion(p){
+  const num=esNumId(S.patient);
+  const real=(num && S.expediente && S.expediente.paciente && String(S.expediente.paciente.id)===String(S.patient)) ? S.expediente : null;
+  if(real){
+    // Las notas son la fuente de los signos vitales: se cargan una vez por paciente
+    // (la pestaña Evolución usa el mismo estado, así que no se piden dos veces).
+    if(S.notasFor!==String(S.patient) && !S.notasCargando) cargarNotas(S.patient);
+    return tabExploracionReal();
+  }
+  if(num) return `<div class="card pad"><p class="lead" style="margin:0">Cargando expediente…</p></div>`;
+  // Paciente demo (id de texto): contenido ilustrativo original, sin API.
   const w=72, h=162; // kg, cm
   const bsaMost=Math.sqrt((h*w)/3600);
   const bsaDu=0.007184*Math.pow(h,0.725)*Math.pow(w,0.425);
@@ -1215,8 +1531,7 @@ function tabExploracion(p){
   return `<div class="grid2" style="grid-template-columns:1.25fr .75fr;gap:22px">
     <div class="card pad">
       <div class="section-title" style="margin-bottom:6px">Signos vitales</div>
-      <p class="lead" style="font-size:12.5px;margin-bottom:10px">Con validación de rango. Se actualizan en cada consulta.</p>
-      <!-- Orden a confirmar por el Dr. Soto: basta reordenar estos renglones. -->
+      <p class="lead" style="font-size:12.5px;margin-bottom:10px">Ejemplo ilustrativo. Al abrir un paciente real, se muestran las mediciones registradas.</p>
       ${v('Frecuencia cardíaca','78','lpm','20–250')}
       ${v('Frecuencia respiratoria','16','rpm','8–40')}
       ${v('Temperatura','36.6','°C','35–41')}
@@ -1224,7 +1539,6 @@ function tabExploracion(p){
       ${vTA('128','82')}
       ${v('Peso','72.0','kg','20–200')}
       ${v('Estatura','162','cm','20–200')}
-      <button class="btn btn-primary" style="margin-top:14px">${ICN.check} Confirmar y registrar</button>
     </div>
     <div>
       <div class="calc-card" style="margin-bottom:12px">
@@ -1236,7 +1550,7 @@ function tabExploracion(p){
       <div class="calc-card" style="background:linear-gradient(160deg,#9A6A24,#7c5419);margin-bottom:12px">
         <div class="cl" style="color:#F0DDBE">Índice de masa corporal</div>
         <div class="cv">${bmi.toFixed(1)}</div>
-        <div class="cf" style="color:#F0DDBE">peso / talla² · normal</div>
+        <div class="cf" style="color:#F0DDBE">peso / talla² · ${clasifIMC(bmi)}</div>
       </div>
       <div class="note">${ICN.target}<div><b>Dosificación.</b> La BSA alimenta el cálculo de dosis de quimioterapia; para carboplatino se integrará la fórmula de Calvert (AUC × [TFG + 25]).</div></div>
     </div>
@@ -1361,25 +1675,65 @@ function evolTratamientoCard(t){
     ${cuerpo}
   </div>`;
 }
-// Render de una nota de evolución: encabezado con fecha/hora, signos vitales
-// presentes (omite nulos) y los textos clínicos no vacíos.
-function evolNotaCard(n){
-  const sv=[['TA',n.ta],['FC',n.fc],['SatO2',n.sato2],['FR',n.fr],['Peso',n.peso],['Talla',n.talla]]
+// Agrupa las notas en visitas: cada nota ORIGINAL con sus correcciones. La API
+// las devuelve planas y mezcladas (originales y correcciones), más nuevas primero.
+function notasAgrupadas(notas){
+  const lista=Array.isArray(notas)?notas:[];
+  const porOriginal=new Map();
+  for(const n of lista){
+    if(n.corrige_a==null) continue;
+    const k=String(n.corrige_a);
+    if(!porOriginal.has(k)) porOriginal.set(k,[]);
+    porOriginal.get(k).push(n);
+  }
+  // De la más antigua a la más nueva: así se leen como historial de la visita.
+  for(const arr of porOriginal.values()) arr.sort((a,b)=>(a.id||0)-(b.id||0));
+  return lista.filter(n=>n.corrige_a==null)
+              .map(o=>({ original:o, correcciones:porOriginal.get(String(o.id))||[] }));
+}
+// Versión vigente de una visita: la última corrección, o la original si no hubo.
+function notaEfectiva(g){
+  return g.correcciones.length ? g.correcciones[g.correcciones.length-1] : g.original;
+}
+
+// Cuerpo de una nota: signos vitales presentes (omite nulos) y textos no vacíos.
+function notaCuerpo(n){
+  const sv=[['TA',n.ta],['FC',n.fc],['SatO2',n.sato2],['FR',n.fr],['Temp',n.temperatura],['Peso',n.peso],['Talla',n.talla]]
     .filter(x=>x[1]!=null && String(x[1]).trim()!=='')
     .map(x=>`<span class="chip chip-line" style="font-size:11.5px">${x[0]}: ${esc(x[1])}</span>`).join('');
   const campo=(label,val)=> (val!=null && String(val).trim()!=='')
     ? `<div style="margin-top:8px"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--slate)">${label}</div>
        <div style="font-size:13px;color:var(--ink);white-space:pre-wrap">${esc(val)}</div></div>` : '';
-  return `<div class="card pad" style="margin-bottom:12px">
-    <div style="display:flex;align-items:center;gap:9px;margin-bottom:4px">
-      <span style="color:var(--petrol)">${ICN.doc}</span>
-      <b style="font-size:13px">${esc(fechaHoraES(n.fecha_hora))}</b>
-    </div>
-    ${sv?`<div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:6px">${sv}</div>`:''}
+  return `${sv?`<div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:6px">${sv}</div>`:''}
     ${campo('Síntomas',n.sintomas)}
     ${campo('Exploración',n.exploracion)}
     ${campo('Evolutivo',n.evolutivo)}
-    ${campo('Plan',n.plan)}
+    ${campo('Plan',n.plan)}`;
+}
+
+// Render de una visita: la nota original y, debajo, sus correcciones en orden.
+// La original NUNCA se oculta ni se reescribe — se atenúa y se rotula como tal,
+// que es lo que exige un expediente clínico: lo asentado se queda.
+function evolNotaCard(g){
+  const o=g.original, corr=g.correcciones, corregida=corr.length>0;
+  const badge = corregida
+    ? `<span class="chip chip-warn" style="font-size:11px">Corregida${corr.length>1?` · ${corr.length}`:''}</span>` : '';
+  const btn = `<button class="btn btn-ghost" data-corregir="${esc(o.id)}" style="margin-left:auto;padding:6px 11px;font-size:12px">${ICN.doc} Corregir</button>`;
+  const bloques = corr.map(c=>`
+    <div style="margin-top:13px;padding-left:13px;border-left:2px solid var(--brass)">
+      <b style="font-size:12.5px;color:var(--brass-deep)">Corrección · ${esc(fechaHoraES(c.creado))}</b>
+      <div style="font-size:12px;color:var(--slate);margin-top:3px"><b>Motivo:</b> ${esc(c.motivo_correccion||'—')}</div>
+      ${notaCuerpo(c)}
+    </div>`).join('');
+  return `<div class="card pad" style="margin-bottom:12px">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:4px;flex-wrap:wrap">
+      <span style="color:var(--petrol)">${ICN.doc}</span>
+      <b style="font-size:13px">${esc(fechaHoraES(o.fecha_hora))}</b>
+      ${badge}${btn}
+    </div>
+    ${corregida?`<div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-top:7px">Versión original</div>`:''}
+    <div style="${corregida?'opacity:.6':''}">${notaCuerpo(o)}</div>
+    ${bloques}
   </div>`;
 }
 function tabEvolucionReal(){
@@ -1392,7 +1746,7 @@ function tabEvolucionReal(){
         : `<div class="card pad"><p style="margin:0;color:var(--muted);font-size:13px">Sin tratamientos registrados</p></div>`);
 
   const notasSec = !notasListas ? cargando
-    : (S.notas.length ? S.notas.map(evolNotaCard).join('')
+    : (S.notas.length ? notasAgrupadas(S.notas).map(evolNotaCard).join('')
         : `<div class="card pad"><p style="margin:0;color:var(--muted);font-size:13px">Sin notas de evolución</p></div>`);
 
   const cab=(titulo,boton)=>`<div style="display:flex;align-items:center;justify-content:space-between;margin:${titulo==='Tratamientos'?'0':'24px'} 0 12px">
@@ -1407,7 +1761,8 @@ function tabEvolucionReal(){
     <div class="note" style="margin-top:16px">${ICN.info}<div>Seguimiento del paciente subsecuente: registra notas de evolución y tratamientos con sus ciclos.</div></div>
     ${S.modalNota?modalNuevaNota():''}
     ${S.modalTrat?modalNuevoTratamiento():''}
-    ${S.modalCiclo?modalNuevoCiclo():''}`;
+    ${S.modalCiclo?modalNuevoCiclo():''}
+    ${S.modalCorr?modalCorreccion():''}`;
 }
 function tabEvolucion(p){
   const num=esNumId(S.patient);
@@ -1458,7 +1813,8 @@ function modalNuevaNota(){
     </div>
     <div class="hint" style="margin:-4px 0 10px">Si dejas fecha y hora vacías, se registra con la fecha y hora actuales.</div>
     <div style="display:flex;gap:12px">${sv('ta','TA','120/80')}${sv('fc','FC','78')}${sv('sato2','SatO2','97%')}</div>
-    <div style="display:flex;gap:12px">${sv('fr','FR','16')}${sv('peso','Peso (kg)','65.850')}${sv('talla','Talla (m)','1.76')}</div>
+    <div style="display:flex;gap:12px">${sv('fr','FR','16')}${sv('temperatura','Temperatura','36.6')}${sv('peso','Peso (kg)','65.850')}</div>
+    <div style="display:flex;gap:12px">${sv('talla','Talla (m)','1.76')}<div class="field" style="flex:2"></div></div>
     ${ta('sintomas','Síntomas','Motivo de la visita, síntomas referidos…')}
     ${ta('exploracion','Exploración física','Hallazgos a la exploración…')}
     ${ta('evolutivo','Evolutivo','Evolución desde la última visita…')}
@@ -1495,7 +1851,7 @@ function modalNuevoCiclo(){
 }
 
 function abrirModalNota(){
-  S.notaForm={ fecha:'', hora:'', ta:'', fc:'', sato2:'', fr:'', peso:'', talla:'', sintomas:'', exploracion:'', evolutivo:'', plan:'' };
+  S.notaForm={ fecha:'', hora:'', ta:'', fc:'', sato2:'', fr:'', temperatura:'', peso:'', talla:'', sintomas:'', exploracion:'', evolutivo:'', plan:'' };
   S.notaError=''; S.notaGuardando=false; S.modalNota=true; render();
 }
 function cerrarModalNota(){ S.modalNota=false; S.notaGuardando=false; S.notaError=''; render(); }
@@ -1510,6 +1866,39 @@ function abrirModalCiclo(tratId){
 }
 function cerrarModalCiclo(){ S.modalCiclo=false; S.cicloGuardando=false; S.cicloError=''; render(); }
 
+// Modal "Corregir nota": se precarga con la versión VIGENTE (la última corrección
+// si la hubo), porque se corrige sobre lo que hoy vale, no sobre lo ya enmendado.
+// El motivo es obligatorio: una corrección sin motivo no es auditable.
+function modalCorreccion(){
+  const f=S.corrForm||{};
+  const sv=(k,label,ph)=>`<div class="field" style="flex:1"><label>${label}</label><input class="input" data-corr="${k}" value="${esc(f[k]||'')}" placeholder="${ph}"></div>`;
+  const ta=(k,label,ph)=>`<div class="field"><label>${label}</label><textarea class="input" data-corr="${k}" rows="3" style="min-height:78px;resize:vertical" placeholder="${ph}">${esc(f[k]||'')}</textarea></div>`;
+  const cuerpo=`
+    <div class="note" style="margin-bottom:15px">${ICN.info}<div>La nota original se conserva sin cambios. Esta corrección se agrega al expediente, fechada y a tu nombre.</div></div>
+    <div class="field"><label>Motivo de la corrección <span class="hint">· requerido</span></label>
+      <textarea class="input" data-corr="motivo_correccion" rows="2" style="min-height:60px;resize:vertical" placeholder="Ej. Se capturó la TA de otro paciente">${esc(f.motivo_correccion||'')}</textarea></div>
+    <div style="display:flex;gap:12px">${sv('ta','TA','120/80')}${sv('fc','FC','78')}${sv('sato2','SatO2','97%')}</div>
+    <div style="display:flex;gap:12px">${sv('fr','FR','16')}${sv('temperatura','Temperatura','36.6')}${sv('peso','Peso (kg)','65.850')}</div>
+    <div style="display:flex;gap:12px">${sv('talla','Talla (m)','1.76')}<div class="field" style="flex:2"></div></div>
+    ${ta('sintomas','Síntomas','Motivo de la visita, síntomas referidos…')}
+    ${ta('exploracion','Exploración física','Hallazgos a la exploración…')}
+    ${ta('evolutivo','Evolutivo','Evolución desde la última visita…')}
+    ${ta('plan','Plan','Conducta, indicaciones, próximo control…')}`;
+  return evolModalShell('Corregir nota de evolución','data-corr-cancel',S.corrError,cuerpo,'data-corr-save',S.corrGuardando);
+}
+function abrirModalCorreccion(notaId){
+  const g=notasAgrupadas(S.notas).find(x=>String(x.original.id)===String(notaId));
+  if(!g) return;
+  const b=notaEfectiva(g);
+  S.corrForm={ notaId:String(notaId),
+    ta:b.ta||'', fc:b.fc||'', sato2:b.sato2||'', fr:b.fr||'', temperatura:b.temperatura||'',
+    peso:b.peso||'', talla:b.talla||'',
+    sintomas:b.sintomas||'', exploracion:b.exploracion||'', evolutivo:b.evolutivo||'', plan:b.plan||'',
+    motivo_correccion:'' };
+  S.corrError=''; S.corrGuardando=false; S.modalCorr=true; render();
+}
+function cerrarModalCorreccion(){ S.modalCorr=false; S.corrGuardando=false; S.corrError=''; render(); }
+
 // Normaliza un campo de texto a su valor o null (los vacíos no se envían como '').
 function oNull(v){ const s=(v==null?'':String(v)).trim(); return s||null; }
 
@@ -1520,7 +1909,8 @@ async function guardarNota(){
   let fecha_hora=null;
   if(f.fecha){ fecha_hora=`${f.fecha}T${f.hora||'00:00'}`; }
   const body={ fecha_hora,
-    ta:oNull(f.ta), fc:oNull(f.fc), sato2:oNull(f.sato2), fr:oNull(f.fr), peso:oNull(f.peso), talla:oNull(f.talla),
+    ta:oNull(f.ta), fc:oNull(f.fc), sato2:oNull(f.sato2), fr:oNull(f.fr), temperatura:oNull(f.temperatura),
+    peso:oNull(f.peso), talla:oNull(f.talla),
     sintomas:oNull(f.sintomas), exploracion:oNull(f.exploracion), evolutivo:oNull(f.evolutivo), plan:oNull(f.plan) };
   S.notaError=''; S.notaGuardando=true; render();
   try{
@@ -1532,6 +1922,24 @@ async function guardarNota(){
     S.modalNota=false; S.notaGuardando=false; S.notaError='';
     await cargarNotas(S.patient);   // recarga: la nota nueva aparece arriba
   }catch(e){ S.notaGuardando=false; S.notaError='No se pudo conectar con el servidor. Intenta de nuevo.'; render(); }
+}
+async function guardarCorreccion(){
+  const f=S.corrForm||{};
+  if(!(f.motivo_correccion||'').trim()){ S.corrError='El motivo de la corrección es obligatorio.'; render(); return; }
+  const body={ motivo_correccion:f.motivo_correccion.trim(),
+    ta:oNull(f.ta), fc:oNull(f.fc), sato2:oNull(f.sato2), fr:oNull(f.fr), temperatura:oNull(f.temperatura),
+    peso:oNull(f.peso), talla:oNull(f.talla),
+    sintomas:oNull(f.sintomas), exploracion:oNull(f.exploracion), evolutivo:oNull(f.evolutivo), plan:oNull(f.plan) };
+  S.corrError=''; S.corrGuardando=true; render();
+  try{
+    const r=await fetch(`/api/notas/${f.notaId}/correccion`,{
+      method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body:JSON.stringify(body)
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){ S.corrGuardando=false; S.corrError=data.error||'No se pudo registrar la corrección.'; render(); return; }
+    S.modalCorr=false; S.corrGuardando=false; S.corrError='';
+    await cargarNotas(S.patient);   // recarga: la corrección aparece bajo su original
+  }catch(e){ S.corrGuardando=false; S.corrError='No se pudo conectar con el servidor. Intenta de nuevo.'; render(); }
 }
 async function guardarTratamiento(){
   const f=S.tratForm||{};
@@ -1930,6 +2338,11 @@ function bind(){
   // Cancelar / guardar de cada modal
   document.querySelectorAll('[data-nota-cancel]').forEach(el=>el.onclick=()=>cerrarModalNota());
   document.querySelectorAll('[data-nota-save]').forEach(el=>el.onclick=()=>guardarNota());
+  // Corrección de nota (addendum): abrir, cancelar, guardar y captura sin re-render.
+  document.querySelectorAll('[data-corregir]').forEach(el=>el.onclick=()=>abrirModalCorreccion(el.getAttribute('data-corregir')));
+  document.querySelectorAll('[data-corr-cancel]').forEach(el=>el.onclick=()=>cerrarModalCorreccion());
+  document.querySelectorAll('[data-corr-save]').forEach(el=>el.onclick=()=>guardarCorreccion());
+  document.querySelectorAll('[data-corr]').forEach(el=>el.oninput=el.onchange=()=>{if(!S.corrForm)S.corrForm={};S.corrForm[el.getAttribute('data-corr')]=el.value;});
   document.querySelectorAll('[data-trat-cancel]').forEach(el=>el.onclick=()=>cerrarModalTrat());
   document.querySelectorAll('[data-trat-save]').forEach(el=>el.onclick=()=>guardarTratamiento());
   document.querySelectorAll('[data-ciclo-cancel]').forEach(el=>el.onclick=()=>cerrarModalCiclo());
@@ -1969,9 +2382,35 @@ function bind(){
 
   // Informe médico: impresión nativa del navegador (solo el documento, vía @media print).
   document.querySelectorAll('[data-print]').forEach(el=>el.onclick=()=>window.print());
+
+  // Suscripción ICS: generar/regenerar, revocar, copiar y bandera de iniciales.
+  document.querySelectorAll('[data-ics-regenerar]').forEach(el=>el.onclick=()=>accionICS('/api/ics/regenerar',{},'Enlace generado.'));
+  document.querySelectorAll('[data-ics-revocar]').forEach(el=>el.onclick=()=>accionICS('/api/ics/revocar',{},'Enlace revocado.'));
+  document.querySelectorAll('[data-ics-copiar]').forEach(el=>el.onclick=()=>copiarEnlaceICS());
+  document.querySelectorAll('[data-ics-iniciales]').forEach(el=>el.onchange=()=>
+    accionICS('/api/ics/iniciales',{iniciales:el.checked}, el.checked?'Se incluirán las iniciales.':'Solo folio, sin iniciales.'));
+
+  // Buscador global: sin render() al teclear, para no perder el foco (ver pintarPanel).
+  const qIn=document.querySelector('[data-q]');
+  if(qIn){
+    qIn.oninput=()=>alTeclearBusqueda(qIn.value);
+    qIn.onfocus=()=>{ if(S.qRes && (S.q||'').trim().length>=2){ S.qAbierto=true; pintarPanel(); } };
+    qIn.onkeydown=(e)=>{ if(e.key==='Escape'){ S.qAbierto=false; pintarPanel(); qIn.blur(); } };
+  }
+  pintarPanel(); // el panel se recrea vacío en cada render: restaura su estado
 }
 
+// Clic fuera del buscador: cierra el panel. Se registra UNA sola vez — bind() corre
+// en cada render y aquí duplicaría el listener en cada navegación.
+document.addEventListener('mousedown', (e)=>{
+  if(!S.qAbierto) return;
+  if(e.target.closest && e.target.closest('.searchbox')) return;
+  S.qAbierto=false; pintarPanel();
+});
+
 render();
+// Enlace del calendario: si la URL trae ?cita=, se abre esa cita al cargar.
+abrirCitaDeURL().then(hubo=>{ if(hubo) render(); });
 </script>
 </body>
 </html>

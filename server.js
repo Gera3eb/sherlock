@@ -20,6 +20,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const pool = require('./src/db');
 const { audit } = require('./src/audit');
+const { construirICS } = require('./src/ics');
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3021', 10);
@@ -54,16 +55,35 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(A, B);
 }
 
+// Destino post-login. Solo se acepta una ruta LOCAL: sin esta validación,
+// /login?next=https://otro-sitio convertiría el login en un redirector abierto
+// para phishing. Se exige "/" inicial y se rechaza "//" y "/\", que los
+// navegadores interpretan como host externo.
+function destinoSeguro(v) {
+  const s = String(v || '');
+  if (!s.startsWith('/')) return null;
+  if (s.startsWith('//') || s.startsWith('/\\')) return null;
+  return s;
+}
+
 function requireAuth(req, res, next) {
   if (req.session && req.session.user) return next();
-  return res.redirect('/login');
+  // Se preserva el destino para que un enlace del calendario abra la cita y no
+  // la agenda de hoy después de iniciar sesión.
+  const next_ = destinoSeguro(req.originalUrl);
+  return res.redirect(next_ && next_ !== '/' ? `/login?next=${encodeURIComponent(next_)}` : '/login');
 }
 
 // Página de login (pública)
 app.get('/login', (req, res) => {
   if (req.session && req.session.user) return res.redirect('/');
-  res.set('Cache-Control', 'no-store');
-  res.sendFile(path.join(PUBLIC, 'login.html'));
+  // Se inyecta el destino en el formulario para que sobreviva al POST.
+  const destino = destinoSeguro(req.query.next) || '';
+  const seguro = destino.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const html = fs.readFileSync(path.join(PUBLIC, 'login.html'), 'utf8')
+                 .replace('/*__NEXT__*/', seguro);
+  res.set('Cache-Control', 'no-store').type('html').send(html);
 });
 
 // Validación de credenciales
@@ -71,11 +91,14 @@ app.post('/login', (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase();
   const password = String(req.body.password || '');
   const u = USERS.find(x => String(x.u).toLowerCase() === username);
+  const destino = destinoSeguro(req.body.next) || '/';
   if (u && safeEqual(u.p, password)) {
     req.session.user = { u: u.u, role: u.role, name: u.name, spec: u.spec };
-    return res.redirect('/');
+    return res.redirect(destino);
   }
-  return res.redirect('/login?e=1');
+  // El destino sobrevive al intento fallido, para no perderlo al equivocarse.
+  const q = destino !== '/' ? `&next=${encodeURIComponent(destino)}` : '';
+  return res.redirect(`/login?e=1${q}`);
 });
 
 app.get('/logout', (req, res) => {
@@ -363,12 +386,13 @@ app.post('/api/pacientes/:id/notas', requireAuth, ensureMedicoId, async (req, re
     }
     const { rows } = await pool.query(
       `INSERT INTO sherlock.notas_evolucion
-         (paciente_id, medico_id, fecha_hora, ta, fc, sato2, fr, peso, talla, sintomas, exploracion, evolutivo, plan)
-       VALUES ($1, $2, COALESCE($3::timestamptz, now()), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         (paciente_id, medico_id, fecha_hora, ta, fc, sato2, fr, temperatura, peso, talla, sintomas, exploracion, evolutivo, plan)
+       VALUES ($1, $2, COALESCE($3::timestamptz, now()), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        RETURNING *`,
       [
         id, req.session.user.medico_id, fechaHora,
-        b.ta || null, b.fc || null, b.sato2 || null, b.fr || null, b.peso || null, b.talla || null,
+        b.ta || null, b.fc || null, b.sato2 || null, b.fr || null, b.temperatura || null,
+        b.peso || null, b.talla || null,
         b.sintomas || null, b.exploracion || null, b.evolutivo || null, b.plan || null,
       ]
     );
@@ -401,6 +425,77 @@ app.get('/api/notas/:notaId', requireAuth, ensureMedicoId, async (req, res) => {
   } catch (e) {
     console.error('[GET /api/notas/:notaId]', e.message);
     res.status(500).json({ error: 'No se pudo obtener la nota de evolución.' });
+  }
+});
+
+// Corrige una nota de evolución SIN alterarla: inserta una nota nueva que apunta
+// a la original (corrige_a). La original se conserva intacta y legible — el
+// expediente clínico no se sobrescribe (NOM-004), se le agrega el addendum.
+app.post('/api/notas/:notaId/correccion', requireAuth, ensureMedicoId, async (req, res) => {
+  const notaId = parseInt(req.params.notaId, 10);
+  if (!Number.isInteger(notaId)) return res.status(400).json({ error: 'El id de nota no es válido.' });
+
+  const b = req.body || {};
+  // Una corrección sin motivo no es auditable: es el dato que explica el cambio.
+  const motivo = String(b.motivo_correccion || '').trim();
+  if (!motivo) return res.status(400).json({ error: 'El motivo de la corrección es obligatorio.' });
+
+  let fechaHora = null;
+  if (b.fecha_hora != null && b.fecha_hora !== '') {
+    if (isNaN(new Date(b.fecha_hora).getTime())) {
+      return res.status(400).json({ error: 'El campo "fecha_hora" no es una fecha/hora válida.' });
+    }
+    fechaHora = String(b.fecha_hora);
+  }
+
+  try {
+    // El JOIN con pacientes es lo que impide corregir la nota de otro médico.
+    const { rows: orig } = await pool.query(
+      `SELECT n.id, n.paciente_id, n.fecha_hora, n.corrige_a
+         FROM sherlock.notas_evolucion n
+         JOIN sherlock.pacientes p ON p.id = n.paciente_id
+        WHERE n.id = $1 AND p.medico_id = $2`,
+      [notaId, req.session.user.medico_id]
+    );
+    if (!orig.length) {
+      return res.status(404).json({ error: 'Nota no encontrada o no pertenece a este médico.' });
+    }
+    // Modelo plano: sin cadenas de correcciones de correcciones (ver migración 006).
+    if (orig[0].corrige_a != null) {
+      return res.status(400).json({
+        error: 'Esa nota ya es una corrección. Corrige la nota original para agregar otra.',
+        nota_original: orig[0].corrige_a,
+      });
+    }
+
+    const o = orig[0];
+    const { rows } = await pool.query(
+      `INSERT INTO sherlock.notas_evolucion
+         (paciente_id, medico_id, fecha_hora, ta, fc, sato2, fr, temperatura, peso, talla,
+          sintomas, exploracion, evolutivo, plan, corrige_a, motivo_correccion)
+       VALUES ($1, $2,
+               -- La corrección es de la MISMA visita: hereda su fecha_hora salvo que
+               -- se corrija precisamente esa fecha. Cuándo se corrigió lo guarda
+               -- "creado". El valor se copia DENTRO de SQL y no vía JS: timestamptz
+               -- tiene microsegundos y el Date de JavaScript solo milisegundos, así
+               -- que el viaje de ida y vuelta desplazaría la hora de la visita.
+               COALESCE($3::timestamptz, (SELECT fecha_hora FROM sherlock.notas_evolucion WHERE id = $15)),
+               $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       RETURNING *`,
+      [
+        o.paciente_id, req.session.user.medico_id, fechaHora,
+        b.ta || null, b.fc || null, b.sato2 || null, b.fr || null, b.temperatura || null,
+        b.peso || null, b.talla || null,
+        b.sintomas || null, b.exploracion || null, b.evolutivo || null, b.plan || null,
+        o.id, motivo,
+      ]
+    );
+    const nota = rows[0];
+    await audit(req, 'corregir', 'nota_evolucion', nota.id, { corrige_a: o.id, motivo });
+    res.status(201).json(nota);
+  } catch (e) {
+    console.error('[POST /api/notas/:notaId/correccion]', e.message);
+    res.status(500).json({ error: 'No se pudo registrar la corrección.' });
   }
 });
 
@@ -562,6 +657,18 @@ app.post('/api/citas', requireAuth, ensureMedicoId, async (req, res) => {
   }
   if (!titulo) return res.status(400).json({ error: 'El título de la cita es obligatorio.' });
 
+  // Hora de término opcional; si no viene, el ICS aplica una duración por tipo.
+  let fin = null;
+  if (b.fin != null && b.fin !== '') {
+    if (isNaN(new Date(b.fin).getTime())) {
+      return res.status(400).json({ error: 'El campo "fin" no es una fecha/hora válida.' });
+    }
+    if (new Date(b.fin) <= new Date(inicio)) {
+      return res.status(400).json({ error: 'La hora de término debe ser posterior al inicio.' });
+    }
+    fin = String(b.fin);
+  }
+
   // paciente_id es opcional; si viene, debe ser entero y pertenecer al médico.
   let pacienteId = null;
   if (b.paciente_id != null && b.paciente_id !== '') {
@@ -578,10 +685,10 @@ app.post('/api/citas', requireAuth, ensureMedicoId, async (req, res) => {
       }
     }
     const { rows } = await pool.query(
-      `INSERT INTO sherlock.citas (medico_id, paciente_id, inicio, titulo, tipo, notas)
-       VALUES ($1, $2, $3::timestamptz, $4, $5, $6)
+      `INSERT INTO sherlock.citas (medico_id, paciente_id, inicio, fin, titulo, tipo, notas)
+       VALUES ($1, $2, $3::timestamptz, $4::timestamptz, $5, $6, $7)
        RETURNING *`,
-      [req.session.user.medico_id, pacienteId, inicio, titulo, b.tipo || null, b.notas || null]
+      [req.session.user.medico_id, pacienteId, inicio, fin, titulo, b.tipo || null, b.notas || null]
     );
     const cita = rows[0];
     await audit(req, 'crear', 'cita', cita.id, { titulo: cita.titulo });
@@ -609,6 +716,227 @@ app.delete('/api/citas/:id', requireAuth, ensureMedicoId, async (req, res) => {
   } catch (e) {
     console.error('[DELETE /api/citas/:id]', e.message);
     res.status(500).json({ error: 'No se pudo eliminar la cita.' });
+  }
+});
+
+// Quita acentos de un texto en JS (lado del patrón de búsqueda).
+function sinAcentos(s) {
+  return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+// Equivalente en SQL (lado de la columna). Los dos mapeos deben coincidir: las
+// vocales acentuadas van a su vocal simple y la ñ a n, igual que hace NFD.
+const ACENTUADAS = 'áéíóúüñÁÉÍÓÚÜÑ';
+const LLANAS     = 'aeiouunAEIOUUN';
+const sqlSinAcentos = (col) => `translate(${col}, '${ACENTUADAS}', '${LLANAS}')`;
+
+// --- Suscripción de agenda por iCalendar (ICS) ---
+
+// URL pública con la que se arman los enlaces del calendario. Se toma de
+// PUBLIC_URL porque el feed lo descarga Google, no el navegador del médico:
+// derivarla de la cabecera Host dejaría que un tercero fabricara enlaces.
+function urlBase(req) {
+  const cfg = String(process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '');
+  if (cfg) return cfg;
+  return `${req.protocol}://${req.get('host')}`;
+}
+
+// Ventana publicada: dos meses atrás y un año adelante. Publicar el historial
+// completo engordaría el feed sin que nadie lo mire.
+const ICS_DIAS_ATRAS = 60;
+const ICS_DIAS_ADELANTE = 365;
+
+// Feed ICS — PÚBLICO por necesidad: Google lo descarga sin sesión. La URL es la
+// credencial, por eso el token es de 32 bytes aleatorios y se puede regenerar.
+app.get('/agenda.ics', async (req, res) => {
+  const token = String(req.query.token || '').trim();
+  if (!token) return res.status(404).type('text').send('No encontrado.');
+  try {
+    const { rows: meds } = await pool.query(
+      'SELECT id, nombre, ics_iniciales FROM sherlock.medicos WHERE ics_token = $1',
+      [token]
+    );
+    // Mismo 404 que sin token: no se confirma si un token existió alguna vez.
+    if (!meds.length) return res.status(404).type('text').send('No encontrado.');
+    const medico = meds[0];
+
+    const { rows: citas } = await pool.query(
+      `SELECT c.id, c.inicio, c.fin, c.tipo, c.paciente_id, p.nombre AS paciente_nombre
+         FROM sherlock.citas c
+         LEFT JOIN sherlock.pacientes p
+                ON p.id = c.paciente_id AND p.medico_id = c.medico_id
+        WHERE c.medico_id = $1
+          AND c.inicio >= now() - ($2 || ' days')::interval
+          AND c.inicio <= now() + ($3 || ' days')::interval
+        ORDER BY c.inicio ASC`,
+      [medico.id, ICS_DIAS_ATRAS, ICS_DIAS_ADELANTE]
+    );
+
+    const ics = construirICS(citas, {
+      nombreCal: `Agenda · ${medico.nombre || 'Sherlock'}`,
+      base: urlBase(req),
+      iniciales: medico.ics_iniciales === true,
+    });
+
+    // Queda en bitácora: es acceso a datos de agenda, aunque venga sin sesión.
+    await audit(
+      { session: { user: { u: 'ics:feed', medico_id: medico.id } }, ip: req.ip },
+      'ver', 'agenda_ics', medico.id, { citas: citas.length }
+    );
+
+    res.set('Cache-Control', 'no-store')
+       .type('text/calendar; charset=utf-8')
+       .send(ics);
+  } catch (e) {
+    console.error('[GET /agenda.ics]', e.message);
+    res.status(500).type('text').send('No se pudo generar el calendario.');
+  }
+});
+
+// Estado del enlace de suscripción del médico en sesión.
+app.get('/api/ics', requireAuth, ensureMedicoId, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT ics_token, ics_iniciales FROM sherlock.medicos WHERE id = $1',
+      [req.session.user.medico_id]
+    );
+    const m = rows[0] || {};
+    res.json({
+      conectado: !!m.ics_token,
+      url: m.ics_token ? `${urlBase(req)}/agenda.ics?token=${m.ics_token}` : null,
+      iniciales: m.ics_iniciales === true,
+    });
+  } catch (e) {
+    console.error('[GET /api/ics]', e.message);
+    res.status(500).json({ error: 'No se pudo obtener el enlace de calendario.' });
+  }
+});
+
+// Genera o REGENERA el token. Regenerar es la vía de revocación: la suscripción
+// anterior deja de funcionar, que es lo que se necesita si el enlace se filtró.
+app.post('/api/ics/regenerar', requireAuth, ensureMedicoId, async (req, res) => {
+  try {
+    const token = crypto.randomBytes(32).toString('base64url');
+    await pool.query('UPDATE sherlock.medicos SET ics_token = $1 WHERE id = $2',
+      [token, req.session.user.medico_id]);
+    await audit(req, 'regenerar', 'agenda_ics', req.session.user.medico_id);
+    res.json({ conectado: true, url: `${urlBase(req)}/agenda.ics?token=${token}` });
+  } catch (e) {
+    console.error('[POST /api/ics/regenerar]', e.message);
+    res.status(500).json({ error: 'No se pudo generar el enlace.' });
+  }
+});
+
+// Revoca el enlace sin generar otro.
+app.post('/api/ics/revocar', requireAuth, ensureMedicoId, async (req, res) => {
+  try {
+    await pool.query('UPDATE sherlock.medicos SET ics_token = NULL WHERE id = $1',
+      [req.session.user.medico_id]);
+    await audit(req, 'revocar', 'agenda_ics', req.session.user.medico_id);
+    res.json({ conectado: false, url: null });
+  } catch (e) {
+    console.error('[POST /api/ics/revocar]', e.message);
+    res.status(500).json({ error: 'No se pudo revocar el enlace.' });
+  }
+});
+
+// Bandera de iniciales: por omisión el evento lleva solo el folio; activarla
+// agrega las iniciales del paciente. Es decisión del cliente, no del código.
+app.post('/api/ics/iniciales', requireAuth, ensureMedicoId, async (req, res) => {
+  try {
+    const valor = req.body && req.body.iniciales === true;
+    await pool.query('UPDATE sherlock.medicos SET ics_iniciales = $1 WHERE id = $2',
+      [valor, req.session.user.medico_id]);
+    await audit(req, 'configurar', 'agenda_ics', req.session.user.medico_id, { iniciales: valor });
+    res.json({ iniciales: valor });
+  } catch (e) {
+    console.error('[POST /api/ics/iniciales]', e.message);
+    res.status(500).json({ error: 'No se pudo guardar la preferencia.' });
+  }
+});
+
+// Una cita del médico en sesión — la usa el enlace profundo del calendario para
+// saber a qué paciente y a qué fecha llevar.
+app.get('/api/citas/:id', requireAuth, ensureMedicoId, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de cita no es válido.' });
+  try {
+    const { rows } = await pool.query(
+      `SELECT c.id, c.inicio, c.fin, c.titulo, c.tipo, c.notas, c.paciente_id
+         FROM sherlock.citas c
+        WHERE c.id = $1 AND c.medico_id = $2`,
+      [id, req.session.user.medico_id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Cita no encontrada o no pertenece a este médico.' });
+    res.json(rows[0]);
+  } catch (e) {
+    console.error('[GET /api/citas/:id]', e.message);
+    res.status(500).json({ error: 'No se pudo obtener la cita.' });
+  }
+});
+
+// Búsqueda global del médico en sesión: pacientes, diagnósticos y estudios.
+// El aislamiento se mantiene igual que en el resto de la API: pacientes filtra por
+// medico_id, y diagnósticos y estudios lo alcanzan por JOIN a pacientes, así que
+// un médico nunca ve resultados de otro.
+app.get('/api/buscar', requireAuth, ensureMedicoId, async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const vacio = { pacientes: [], diagnosticos: [], estudios: [] };
+  // Con una sola letra la búsqueda devuelve medio expediente: no vale la pena.
+  if (q.length < 2) return res.json(vacio);
+
+  // Búsqueda sin acentos: nadie teclea "Méndez" ni "mastografía" con acento en un
+  // buscador, y sin esto no encontraban nada. Se normalizan los DOS lados —el
+  // patrón aquí y la columna en SQL con translate()— en lugar de usar la extensión
+  // unaccent, que obligaría a crearla en cada base (dev y prod) antes de desplegar.
+  // NFD descompone la vocal acentuada y el filtro quita la tilde suelta; la ñ pasa
+  // a n por el mismo camino, así que "munoz" encuentra "Muñoz".
+  const patron = '%' + sinAcentos(q).replace(/([\\%_])/g, '\\$1') + '%';
+  const medicoId = req.session.user.medico_id;
+  const LIMITE = 8; // por grupo: el panel es un atajo, no un listado
+
+  try {
+    const [pac, dx, est] = await Promise.all([
+      pool.query(
+        `SELECT id, nombre, dx_resumen
+           FROM sherlock.pacientes
+          WHERE medico_id = $1
+            AND (${sqlSinAcentos('nombre')} ILIKE $2 OR ${sqlSinAcentos('dx_resumen')} ILIKE $2)
+          ORDER BY nombre
+          LIMIT $3`,
+        [medicoId, patron, LIMITE]
+      ),
+      pool.query(
+        `SELECT d.id, d.paciente_id, p.nombre AS paciente,
+                d.tipo_histologico, d.subtipo, d.etapa, d.fecha
+           FROM sherlock.diagnosticos d
+           JOIN sherlock.pacientes p ON p.id = d.paciente_id
+          WHERE p.medico_id = $1
+            AND (${sqlSinAcentos('d.tipo_histologico')} ILIKE $2
+              OR ${sqlSinAcentos('d.subtipo')} ILIKE $2
+              OR ${sqlSinAcentos('d.etapa')} ILIKE $2)
+          ORDER BY d.fecha DESC NULLS LAST, d.id DESC
+          LIMIT $3`,
+        [medicoId, patron, LIMITE]
+      ),
+      pool.query(
+        `SELECT e.id, e.paciente_id, p.nombre AS paciente,
+                e.categoria, e.fecha, e.descripcion
+           FROM sherlock.estudios e
+           JOIN sherlock.pacientes p ON p.id = e.paciente_id
+          WHERE p.medico_id = $1
+            AND (${sqlSinAcentos('e.descripcion')} ILIKE $2 OR ${sqlSinAcentos('e.categoria')} ILIKE $2)
+          ORDER BY e.fecha DESC NULLS LAST, e.id DESC
+          LIMIT $3`,
+        [medicoId, patron, LIMITE]
+      ),
+    ]);
+
+    // Queda en bitácora qué se buscó: es acceso a datos del expediente (NOM-004).
+    await audit(req, 'buscar', 'global', null, { q });
+    res.json({ pacientes: pac.rows, diagnosticos: dx.rows, estudios: est.rows });
+  } catch (e) {
+    console.error('[GET /api/buscar]', e.message);
+    res.status(500).json({ error: 'No se pudo completar la búsqueda.' });
   }
 });
 

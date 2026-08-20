@@ -84,6 +84,8 @@ input{font-family:inherit;font-size:14px;color:var(--ink)}
       <div class="h2" style="margin-top:6px">Bienvenido</div>
       <p class="lead" style="margin-bottom:22px">Ingresa con tu usuario y contraseña.</p>
       <div class="err" id="err"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg> Usuario o contraseña incorrectos.</div>
+      <!-- Destino tras iniciar sesión; el servidor lo sustituye (ver GET /login). -->
+      <input type="hidden" name="next" value="/*__NEXT__*/">
       <div class="field"><label for="username">Usuario</label><input class="input" id="username" name="username" placeholder="tu.usuario" autocapitalize="none" autocomplete="username" required></div>
       <div class="field"><label for="password">Contraseña</label><input class="input" id="password" name="password" type="password" placeholder="••••••••" autocomplete="current-password" required></div>
       <button class="btn-primary" type="submit">Acceder al portal</button>
