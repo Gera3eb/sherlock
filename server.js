@@ -21,16 +21,34 @@ const crypto = require('crypto');
 const pool = require('./src/db');
 const { audit } = require('./src/audit');
 const { construirICS } = require('./src/ics');
+const { verificarPassword, esHash, compararTextoPlano } = require('./src/passwords');
+const PgSession = require('connect-pg-simple')(session);
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3021', 10);
 const PUBLIC = path.join(__dirname, 'public');
 
-// Usuarios: [{ "u":"esoto", "p":"...", "role":"soto", "name":"Dr. Santos Soto", "spec":"..." }, ...]
+// Usuarios: [{ "u":"ssoto", "p":"scrypt$...", "role":"soto", "name":"Dr. Santos Soto", "spec":"..." }, ...]
+// El campo "p" debe ser un HASH generado con `node hash-password.js`.
 let USERS = [];
 try { USERS = JSON.parse(process.env.USERS || '[]'); }
 catch (e) { console.error('USERS en .env no es JSON válido:', e.message); }
 if (!USERS.length) console.warn('[Sherlock] Aviso: no hay USERS configurados en .env');
+
+// Aviso de arranque para los usuarios que sigan con la contraseña en texto plano.
+// Se acepta el formato viejo para no dejar fuera a nadie al desplegar, pero es un
+// camino de transición: en texto plano, quien lea el .env tiene la contraseña.
+const SIN_HASH = USERS.filter(u => !esHash(u.p)).map(u => u.u);
+if (SIN_HASH.length) {
+  console.warn('');
+  console.warn('  ┌─────────────────────────────────────────────────────────────');
+  console.warn('  │ AVISO DE SEGURIDAD: contraseñas en texto plano en .env');
+  console.warn('  │ Usuarios afectados: ' + SIN_HASH.join(', '));
+  console.warn('  │ Genera el hash con:  node hash-password.js "<contraseña>"');
+  console.warn('  │ y reemplaza el campo "p" de ese usuario en USERS.');
+  console.warn('  └─────────────────────────────────────────────────────────────');
+  console.warn('');
+}
 
 app.set('trust proxy', 1); // detrás de Nginx
 app.use(express.urlencoded({ extended: false }));
@@ -38,22 +56,32 @@ app.use(express.json());
 app.use(session({
   name: 'shk.sid',
   secret: process.env.SESSION_SECRET || 'cambia-este-secreto',
+  // Sesiones en Postgres, no en memoria: reiniciar el proceso ya no expulsa a
+  // nadie, y el día que haya más de una instancia detrás de Nginx la sesión
+  // seguirá siendo válida en todas. La tabla la crea la migración 008.
+  store: new PgSession({
+    pool,
+    schemaName: 'sherlock',
+    tableName: 'session',
+    // La tabla viene de migrations/; que la cree el arranque escondería un
+    // despliegue al que le faltaron migraciones.
+    createTableIfMissing: false,
+    pruneSessionInterval: 60 * 15, // limpia expiradas cada 15 min
+  }),
   resave: false,
   saveUninitialized: false,
+  // La expiración cuenta desde la última actividad, no desde el login: el médico
+  // que usa Sherlock a lo largo del día no vuelve a escribir su contraseña.
+  // connect-pg-simple implementa touch(), así que con resave:false la fila se
+  // actualiza igual. Ocho horas SIN actividad siguen cerrando la sesión.
+  rolling: true,
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
-    maxAge: 1000 * 60 * 60 * 8,                 // 8 horas
+    maxAge: 1000 * 60 * 60 * 8,                 // 8 horas de inactividad
     secure: process.env.COOKIE_SECURE === '1',  // 1 cuando va por HTTPS (Nginx)
   },
 }));
-
-function safeEqual(a, b) {
-  const A = Buffer.from(String(a || ''));
-  const B = Buffer.from(String(b || ''));
-  if (A.length !== B.length) return false;
-  return crypto.timingSafeEqual(A, B);
-}
 
 // Destino post-login. Solo se acepta una ruta LOCAL: sin esta validación,
 // /login?next=https://otro-sitio convertiría el login en un redirector abierto
@@ -87,18 +115,37 @@ app.get('/login', (req, res) => {
 });
 
 // Validación de credenciales
-app.post('/login', (req, res) => {
+app.post('/login', async (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase();
   const password = String(req.body.password || '');
   const u = USERS.find(x => String(x.u).toLowerCase() === username);
   const destino = destinoSeguro(req.body.next) || '/';
-  if (u && safeEqual(u.p, password)) {
-    req.session.user = { u: u.u, role: u.role, name: u.name, spec: u.spec };
-    return res.redirect(destino);
+  const fallar = () => {
+    // El destino sobrevive al intento fallido, para no perderlo al equivocarse.
+    const q = destino !== '/' ? `&next=${encodeURIComponent(destino)}` : '';
+    res.redirect(`/login?e=1${q}`);
+  };
+  try {
+    // Hash (lo normal) o texto plano (heredado, con aviso al arrancar).
+    const ok = u && (esHash(u.p)
+      ? await verificarPassword(password, u.p)
+      : compararTextoPlano(u.p, password));
+    if (!ok) return fallar();
+
+    // Renovar el id de sesión al autenticar cierra la fijación de sesión: un id
+    // obtenido antes del login deja de servir.
+    return req.session.regenerate((err) => {
+      if (err) { console.error('[POST /login] regenerate:', err.message); return fallar(); }
+      req.session.user = { u: u.u, role: u.role, name: u.name, spec: u.spec };
+      req.session.save((err2) => {
+        if (err2) { console.error('[POST /login] save:', err2.message); return fallar(); }
+        res.redirect(destino);
+      });
+    });
+  } catch (e) {
+    console.error('[POST /login]', e.message);
+    return fallar();
   }
-  // El destino sobrevive al intento fallido, para no perderlo al equivocarse.
-  const q = destino !== '/' ? `&next=${encodeURIComponent(destino)}` : '';
-  return res.redirect(`/login?e=1${q}`);
 });
 
 app.get('/logout', (req, res) => {

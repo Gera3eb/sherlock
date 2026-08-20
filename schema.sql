@@ -152,7 +152,15 @@ CREATE TABLE IF NOT EXISTS sherlock.auditoria (
   creado          timestamptz DEFAULT now()
 );
 
+-- Sesiones de express-session (connect-pg-simple). Ver migración 008.
+CREATE TABLE IF NOT EXISTS sherlock.session (
+  sid    varchar PRIMARY KEY,
+  sess   json NOT NULL,
+  expire timestamp(6) NOT NULL
+);
+
 -- Índices
+CREATE INDEX IF NOT EXISTS idx_session_expire  ON sherlock.session (expire);
 CREATE INDEX IF NOT EXISTS idx_auditoria_entidad ON sherlock.auditoria (entidad, entidad_id);
 CREATE INDEX IF NOT EXISTS idx_pacientes_medico  ON sherlock.pacientes (medico_id);
 CREATE INDEX IF NOT EXISTS idx_notas_paciente        ON sherlock.notas_evolucion (paciente_id);

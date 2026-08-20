@@ -29,6 +29,7 @@ endurecimiento (ver "Pendientes conocidos").
 server.js          Express: login, sesión, API REST, sirve la SPA protegida
 migrate.js         schema.sql + migraciones pendientes (idempotente) · node migrate.js
 seed.js            siembra médicos + pacientes/citas de ejemplo · node seed.js
+hash-password.js   genera el hash de scrypt para USERS del .env · node hash-password.js
 schema.sql         esquema completo del schema "sherlock" (idempotente)
 migrations/        cambios incrementales aplicados sobre schema.sql
 src/
@@ -45,7 +46,8 @@ Deps: `express`, `express-session`, `dotenv`, `pg`.
 ## Base de datos (Neon Postgres)
 Schema dedicado **`sherlock`**. Tablas: `medicos`, `pacientes`, `citas`, `antecedentes`,
 `estudios`, `diagnosticos`, `notas_evolucion`, `tratamientos`, `ciclos`, `auditoria`, y
-`migraciones` (bitácora de qué archivo de `migrations/` ya se aplicó).
+`migraciones` (bitácora de qué archivo de `migrations/` ya se aplicó) y `session` (sesiones
+de express-session; no lleva datos clínicos).
 Diseño orientado a NOM-004, NOM-024 y LFPDPPP; `auditoria` es **solo-append** (nunca
 UPDATE/DELETE sobre ella).
 
@@ -105,8 +107,13 @@ Ver `.env.example` para el formato completo. Variables: `PORT`, `COOKIE_SECURE`,
   `seed.js`), porque `ensureMedicoId` resuelve el `medico_id` por ese campo. Si no coincide,
   toda la API responde `403 "El usuario en sesión no tiene un médico asociado"`.
 - `role` debe ser `soto` o `escobar` (el front mapea cédulas y vistas por ese rol).
-- Generar contraseñas en el servidor (`openssl rand -base64 9`), imprimirlas UNA vez para
-  entregarlas a cada médico, y NO pegarlas en chats ni en el repo.
+- **`p` es un HASH de scrypt, no la contraseña.** Se genera en el servidor con
+  `node hash-password.js` (sin argumento inventa una contraseña; con argumento hashea la
+  que le des). La contraseña se imprime UNA vez para entregarla al médico y no se guarda en
+  ningún lado; al `.env` va solo el hash.
+- Un valor que no empiece con `scrypt$` se trata como **texto plano heredado**: sigue
+  funcionando, pero el servidor lo denuncia al arrancar con el nombre del usuario. Es un
+  camino de transición, no un modo soportado.
 
 ## Correr local
 ```
@@ -201,9 +208,10 @@ solo, sobre `#q-panel` (ver `pintarPanel()`).
   conviene el mismo criterio de addendum antes que un UPDATE. Borrar: solo citas y ciclos.
 - **Motor de estadificación**: solo mama. Próstata/colon/pulmón están parametrizados pero
   sin catálogos (el seed incluye un paciente de próstata que aún no se puede estadificar).
-- **Antes de pacientes reales**: contraseñas en texto plano en `.env` (falta hash),
-  sesiones en MemoryStore (migrar a `connect-pg-simple`), sin rate limiting en `POST /login`,
-  `ssl.rejectUnauthorized:false` en `src/db.js`.
+- **Antes de pacientes reales**: falta **rate limiting en `POST /login`** y
+  `ssl.rejectUnauthorized:false` sigue en `src/db.js`. Lo del rate limiting subió de
+  prioridad al pasar a scrypt: cada intento cuesta ~50 ms de CPU, así que sin freno un
+  atacante puede tumbar el servicio a fuerza de intentos fallidos, aunque no adivine nada.
 - La vista **Seguridad** describe objetivos de diseño (cifrado en reposo, marca de agua,
   respaldo cifrado), no funcionalidad entregada. Cuidar cómo se presenta al cliente.
 - La tarjeta **"Auto-agenda del paciente"** de la Agenda sigue siendo maqueta: el paciente no
@@ -213,5 +221,9 @@ solo, sobre `#q-panel` (ver `pintarPanel()`).
 
 ## Notas
 - `app.set('trust proxy',1)` ya está (va detrás de Nginx). Cookie `secure` con `COOKIE_SECURE=1`.
-- Sesiones en memoria (MemoryStore): un reinicio obliga a re-login. Aceptable para demo.
+- Sesiones en **Postgres** (`connect-pg-simple`, tabla `sherlock.session`, migración 008):
+  reiniciar el proceso ya no expulsa a nadie y la sesión valdría igual con varias instancias.
+  Con `rolling:true` las 8 horas cuentan desde la última actividad, no desde el login — el
+  médico que usa Sherlock durante el día no vuelve a escribir su contraseña.
+- `POST /login` renueva el id de sesión al autenticar (fijación de sesión).
 - dev y prod pueden tener contraseñas distintas (cada uno su `.env`).
