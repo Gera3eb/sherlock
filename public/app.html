@@ -728,6 +728,11 @@ function copiarEnlaceICS(){
     navigator.clipboard.writeText(el.value).then(listo).catch(()=>{ try{document.execCommand('copy');listo();}catch(e){} });
   } else { try{document.execCommand('copy');listo();}catch(e){} }
 }
+// Mismo feed, distinto esquema: webcal:// hace que iOS abra la app Calendario y
+// ofrezca suscribirse de un toque, en vez de copiar la URL y navegar Ajustes.
+// Los dos médicos usan iPhone; en Outlook y Google el enlace funciona igual.
+function urlWebcal(u){ return String(u||'').replace(/^https?:\/\//i, 'webcal://'); }
+
 function tarjetaICS(){
   const s=S.ics;
   const cab=`<div class="section-title" style="margin-bottom:8px">Tu agenda en tu calendario</div>`;
@@ -737,11 +742,14 @@ function tarjetaICS(){
     ? `<div class="field" style="margin-bottom:10px">
          <input class="input mono" data-ics-url value="${esc(s.url)}" readonly style="font-size:11px">
        </div>
+       <a class="btn btn-primary" href="${esc(urlWebcal(s.url))}" style="width:100%;justify-content:center;text-decoration:none;margin-bottom:8px">${ICN.calendar} Suscribir en iPhone</a>
        <div style="display:flex;gap:8px;flex-wrap:wrap">
-         <button class="btn btn-primary" data-ics-copiar style="flex:1;justify-content:center">${ICN.check} Copiar enlace</button>
+         <button class="btn btn-ghost" data-ics-copiar style="flex:1;justify-content:center">${ICN.check} Copiar enlace</button>
          <button class="btn btn-ghost" data-ics-regenerar>Regenerar</button>
          <button class="btn btn-ghost" data-ics-revocar>Revocar</button>
        </div>
+       <div style="margin-top:10px;font-size:11.5px;color:var(--muted);line-height:1.5">Ábrelo desde el iPhone. Para que refresque cada 5 minutos:
+         Ajustes › Calendario › Cuentas › Calendarios suscritos › este calendario › Frecuencia de actualización.</div>
        <label style="display:flex;align-items:center;gap:9px;margin-top:14px;font-size:12.5px;color:var(--slate);cursor:pointer">
          <input type="checkbox" data-ics-iniciales ${s.iniciales?'checked':''}>
          Incluir iniciales del paciente (ej. S.M.R.)
