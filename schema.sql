@@ -7,6 +7,14 @@
 
 CREATE SCHEMA IF NOT EXISTS sherlock;
 
+-- Bitácora de migraciones aplicadas: qué archivo de migrations/ se corrió y
+-- cuándo. La usa migrate.js para saber qué falta; también la crea él mismo, para
+-- funcionar contra bases que existían antes de que hubiera bitácora.
+CREATE TABLE IF NOT EXISTS sherlock.migraciones (
+  nombre   text PRIMARY KEY,
+  aplicada timestamptz DEFAULT now()
+);
+
 -- Médicos (un usuario de login por médico; rol: 'soto' | 'escobar')
 CREATE TABLE IF NOT EXISTS sherlock.medicos (
   id            serial PRIMARY KEY,

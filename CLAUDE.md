@@ -27,7 +27,7 @@ endurecimiento (ver "Pendientes conocidos").
 ## Estructura
 ```
 server.js          Express: login, sesión, API REST, sirve la SPA protegida
-migrate.js         aplica schema.sql contra Neon (idempotente) · node migrate.js
+migrate.js         schema.sql + migraciones pendientes (idempotente) · node migrate.js
 seed.js            siembra médicos + pacientes/citas de ejemplo · node seed.js
 schema.sql         esquema completo del schema "sherlock" (idempotente)
 migrations/        cambios incrementales aplicados sobre schema.sql
@@ -44,7 +44,8 @@ Deps: `express`, `express-session`, `dotenv`, `pg`.
 
 ## Base de datos (Neon Postgres)
 Schema dedicado **`sherlock`**. Tablas: `medicos`, `pacientes`, `citas`, `antecedentes`,
-`estudios`, `diagnosticos`, `notas_evolucion`, `tratamientos`, `ciclos`, `auditoria`.
+`estudios`, `diagnosticos`, `notas_evolucion`, `tratamientos`, `ciclos`, `auditoria`, y
+`migraciones` (bitácora de qué archivo de `migrations/` ya se aplicó).
 Diseño orientado a NOM-004, NOM-024 y LFPDPPP; `auditoria` es **solo-append** (nunca
 UPDATE/DELETE sobre ella).
 
@@ -57,19 +58,25 @@ UPDATE/DELETE sobre ella).
 
 Aplicar esquema y sembrar:
 ```
-node migrate.js    # ejecuta schema.sql (idempotente)
+node migrate.js    # schema.sql + las migraciones pendientes de migrations/
 node seed.js       # médicos siempre; pacientes/citas solo si la tabla está vacía
 ```
 
-> **Cuidado: `migrate.js` NO aplica `migrations/`.** Solo ejecuta `schema.sql`, y como sus
-> `CREATE TABLE` son `IF NOT EXISTS`, sobre una base que ya existe **no agrega columnas
-> nuevas** — imprime "Esquema OK" y deja el esquema viejo. `schema.sql` sirve para una base
-> desde cero; `migrations/` es lo que actualiza dev y prod. Hay que correrlas a mano, en
-> orden, tras cada despliegue que traiga migraciones nuevas:
-> ```
-> for m in migrations/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$m"; done
-> ```
-> Todas son idempotentes (`IF NOT EXISTS`), así que re-ejecutarlas es inofensivo.
+`migrate.js` hace las dos cosas: ejecuta `schema.sql` (que crea el esquema desde cero) y
+después aplica en orden los archivos de `migrations/` que no estén en
+`sherlock.migraciones`, dejando ahí constancia. **No hay paso manual tras desplegar.**
+
+Reglas al agregar una migración nueva:
+- **Prefijo numérico a tres dígitos** (`008_...`): el orden lexicográfico del nombre es el
+  orden de aplicación.
+- **Idempotente** (`IF NOT EXISTS`). Es convención del proyecto y además lo que hace
+  inofensivo que dos despliegues simultáneos apliquen la misma migración — `migrate.js` no
+  toma un bloqueo entre procesos.
+- Cada migración se aplica y se registra **en la misma transacción**: si falla, se revierte
+  entera, no queda registrada y el script sale con código distinto de cero. Si alguna vez se
+  necesitara una sentencia que no admite transacción (`CREATE INDEX CONCURRENTLY`), habría
+  que tratarla aparte.
+- Actualizar también `schema.sql`, que es lo que ve una base creada desde cero.
 
 ## Rutas
 Públicas: `GET /login` · `POST /login` (valida contra `USERS` del `.env`) · `GET /logout` ·
@@ -184,9 +191,6 @@ topbar y con él el input, así que se perdería el foco en cada tecla. El panel
 solo, sobre `#q-panel` (ver `pintarPanel()`).
 
 ## Pendientes conocidos
-- **`migrate.js` no corre `migrations/`** (ver aviso arriba). Es un pie de banco: quien
-  despliegue puede leer "Esquema OK" y creer que la base quedó al día. Conviene que
-  `migrate.js` las aplique en orden y lleve registro de cuáles ya se aplicaron.
 - **Modo Asistente · iPad**: maqueta, no persiste. El toggle Médico/Asistente es visual;
   no existe rol `asistente` real ni permisos diferenciados.
 - **Paciente demo `'sara'`** sigue en el front con id de texto y sostiene un camino de
