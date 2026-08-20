@@ -208,10 +208,7 @@ solo, sobre `#q-panel` (ver `pintarPanel()`).
   conviene el mismo criterio de addendum antes que un UPDATE. Borrar: solo citas y ciclos.
 - **Motor de estadificación**: solo mama. Próstata/colon/pulmón están parametrizados pero
   sin catálogos (el seed incluye un paciente de próstata que aún no se puede estadificar).
-- **Antes de pacientes reales**: falta **rate limiting en `POST /login`** y
-  `ssl.rejectUnauthorized:false` sigue en `src/db.js`. Lo del rate limiting subió de
-  prioridad al pasar a scrypt: cada intento cuesta ~50 ms de CPU, así que sin freno un
-  atacante puede tumbar el servicio a fuerza de intentos fallidos, aunque no adivine nada.
+- **Antes de pacientes reales**: queda `ssl.rejectUnauthorized:false` en `src/db.js`.
 - La vista **Seguridad** describe objetivos de diseño (cifrado en reposo, marca de agua,
   respaldo cifrado), no funcionalidad entregada. Cuidar cómo se presenta al cliente.
 - La tarjeta **"Auto-agenda del paciente"** de la Agenda sigue siendo maqueta: el paciente no
@@ -226,4 +223,12 @@ solo, sobre `#q-panel` (ver `pintarPanel()`).
   Con `rolling:true` las 8 horas cuentan desde la última actividad, no desde el login — el
   médico que usa Sherlock durante el día no vuelve a escribir su contraseña.
 - `POST /login` renueva el id de sesión al autenticar (fijación de sesión).
+- **Freno de intentos en `POST /login`** (`src/ratelimit.js`): 10 fallos por ventana de 15
+  min, contados por IP **y** por usuario. La comprobación va **antes** de verificar la
+  contraseña — ese es el punto: con scrypt cada intento cuesta ~50 ms de CPU, así que sin
+  freno se puede tumbar el servicio sin adivinar nada. Un login correcto limpia el contador.
+  Se audita solo el intento que cruza el umbral; auditar la avalancha entera la convertiría
+  en escrituras contra la base. Vive **en memoria** a propósito (guardarlo en Postgres
+  amplificaría hacia la base justo la carga que se quiere evitar): se reinicia con el
+  proceso y no se comparte entre instancias, aceptable con un solo proceso por servidor.
 - dev y prod pueden tener contraseñas distintas (cada uno su `.env`).

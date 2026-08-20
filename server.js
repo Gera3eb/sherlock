@@ -22,6 +22,7 @@ const pool = require('./src/db');
 const { audit } = require('./src/audit');
 const { construirICS } = require('./src/ics');
 const { verificarPassword, esHash, compararTextoPlano } = require('./src/passwords');
+const limite = require('./src/ratelimit');
 const PgSession = require('connect-pg-simple')(session);
 
 const app = express();
@@ -120,17 +121,42 @@ app.post('/login', async (req, res) => {
   const password = String(req.body.password || '');
   const u = USERS.find(x => String(x.u).toLowerCase() === username);
   const destino = destinoSeguro(req.body.next) || '/';
-  const fallar = () => {
-    // El destino sobrevive al intento fallido, para no perderlo al equivocarse.
-    const q = destino !== '/' ? `&next=${encodeURIComponent(destino)}` : '';
-    res.redirect(`/login?e=1${q}`);
-  };
+  const q = destino !== '/' ? `&next=${encodeURIComponent(destino)}` : '';
+  // El destino sobrevive al intento fallido, para no perderlo al equivocarse.
+  const fallar = (codigo = 1) => res.redirect(`/login?e=${codigo}${q}`);
+
+  // Se cuenta por IP y por usuario; basta que una esté bloqueada.
+  const claveIp = 'ip:' + (req.ip || 'desconocida');
+  const claveUsuario = 'usuario:' + username;
+
   try {
+    // ANTES de verificar la contraseña: un intento bloqueado no debe costar los
+    // ~50 ms de scrypt, que es justo lo que un atacante querría gastarnos.
+    if (limite.segundosDeBloqueo(claveIp) || limite.segundosDeBloqueo(claveUsuario)) {
+      return fallar(2);
+    }
+
     // Hash (lo normal) o texto plano (heredado, con aviso al arrancar).
     const ok = u && (esHash(u.p)
       ? await verificarPassword(password, u.p)
       : compararTextoPlano(u.p, password));
-    if (!ok) return fallar();
+
+    if (!ok) {
+      const cruzoIp = limite.registrarFallo(claveIp);
+      const cruzoUsuario = limite.registrarFallo(claveUsuario);
+      // Se audita SOLO el intento que cruza el umbral: registrar cada uno de los
+      // siguientes convertiría la avalancha en escrituras contra la base.
+      if (cruzoIp || cruzoUsuario) {
+        await audit(req, 'bloquear', 'login', null, {
+          usuario: username, motivo: cruzoIp ? 'ip' : 'usuario', minutos: limite.VENTANA_MS / 60000,
+        });
+      }
+      return fallar(1);
+    }
+
+    // Entrar limpia el contador: equivocarse y luego acertar no deja penalización.
+    limite.limpiar(claveIp);
+    limite.limpiar(claveUsuario);
 
     // Renovar el id de sesión al autenticar cierra la fijación de sesión: un id
     // obtenido antes del login deja de servir.

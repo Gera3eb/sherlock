@@ -83,7 +83,7 @@ input{font-family:inherit;font-size:14px;color:var(--ink)}
       <div class="h-eyebrow" style="color:var(--brass-deep)">Acceso al portal</div>
       <div class="h2" style="margin-top:6px">Bienvenido</div>
       <p class="lead" style="margin-bottom:22px">Ingresa con tu usuario y contraseña.</p>
-      <div class="err" id="err"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg> Usuario o contraseña incorrectos.</div>
+      <div class="err" id="err"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg> <span id="err-txt">Usuario o contraseña incorrectos.</span></div>
       <!-- Destino tras iniciar sesión; el servidor lo sustituye (ver GET /login). -->
       <input type="hidden" name="next" value="/*__NEXT__*/">
       <div class="field"><label for="username">Usuario</label><input class="input" id="username" name="username" placeholder="tu.usuario" autocapitalize="none" autocomplete="username" required></div>
@@ -94,7 +94,14 @@ input{font-family:inherit;font-size:14px;color:var(--ink)}
   </div>
 </div>
 <script>
-  if(new URLSearchParams(location.search).get('e')) document.getElementById('err').classList.add('show');
+  // e=1 credenciales incorrectas · e=2 demasiados intentos (ver POST /login).
+  // El mensaje de bloqueo no dice si el usuario existe ni cuánto falta exactamente.
+  var e = new URLSearchParams(location.search).get('e');
+  if(e){
+    if(e === '2') document.getElementById('err-txt').textContent =
+      'Demasiados intentos fallidos. Espera unos minutos antes de volver a intentar.';
+    document.getElementById('err').classList.add('show');
+  }
 </script>
 </body>
 </html>
