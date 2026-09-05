@@ -949,17 +949,13 @@ async function guardarDiagnostico(){
 }
 
 // Siembra S.antForm con los antecedentes guardados (objeto jsonb libre) para
-// editarlos en la pestaña de Historia. Si no hay registro previo, deja vacíos.
+// editarlos en la pestaña de Historia. Copia TODAS las claves guardadas (ficha
+// de identificación, gineco estructurado, exploración…): guardarAntecedentes
+// reenvía el objeto completo, así ninguna clave se pierde en el PUT (reemplaza
+// el jsonb entero).
 function prefillAntecedentes(ant){
   const d=(ant && ant.datos) || {};
-  S.antForm={
-    heredofamiliares: d.heredofamiliares || '',
-    patologicos:      d.patologicos      || '',
-    quirurgicos:      d.quirurgicos      || '',
-    alergias:         d.alergias         || '',
-    gineco_obstetricos: d.gineco_obstetricos || '',
-    no_patologicos:   d.no_patologicos   || '',
-  };
+  S.antForm={...d};
 }
 
 // Persiste los antecedentes del paciente real vía PUT (UPSERT jsonb).
@@ -1317,20 +1313,59 @@ function acc(flag,title,sub,body){
 function tabHistoriaReal(real){
   const f=S.antForm || {};
   const esF = real.sexo==='F';
-  const ta=(k,label,ph)=>`<div class="field"><label>${label}</label>
-    <textarea class="input" data-ant="${k}" rows="3" style="min-height:80px;resize:vertical" placeholder="${ph}">${esc(f[k]||'')}</textarea></div>`;
+  const ta=(k,label,ph,rows)=>`<div class="field"><label>${label}</label>
+    <textarea class="input" data-ant="${k}" rows="${rows||3}" style="min-height:${rows?rows*26:80}px;resize:vertical" placeholder="${ph}">${esc(f[k]||'')}</textarea></div>`;
+  // Campos cortos con etiqueta permanente: la guía de qué capturar (menarca,
+  // gestas, menopausia…) vive en el label y NO desaparece al escribir.
+  const inp=(k,label,ph)=>`<div class="field"><label>${label}</label>
+    <input class="input" data-ant="${k}" placeholder="${ph}" value="${esc(f[k]||'')}"></div>`;
+  // Gineco-obstétricos estructurados (solo pacientes femeninos), con pregunta
+  // explícita de anticonceptivos orales u otros hormonales.
+  const gineco = esF ? `<div style="border-top:1px solid var(--paper-2);margin-top:6px;padding-top:12px">
+        <div class="section-title" style="margin-bottom:10px">Gineco-obstétricos</div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+          ${inp('gineco_gestas','Gestas','#')}
+          ${inp('gineco_partos','Partos','#')}
+          ${inp('gineco_abortos','Abortos','#')}
+          ${inp('gineco_cesareas','Cesáreas','#')}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          ${inp('gineco_menarca','Menarca (edad)','p. ej. 12 años')}
+          ${inp('gineco_menopausia','Menopausia','Edad, o "no" si no ha ocurrido')}
+        </div>
+        ${inp('gineco_hormonales','Anticonceptivos orales u otros hormonales','¿Usa o usó? Tipo y tiempo de uso…')}
+        ${ta('gineco_obstetricos','Mastografías y otros datos gineco-obstétricos','Última mastografía y BIRADS, ultrasonidos, implantes, lactancia…')}
+      </div>` : '';
   return `<div class="grid2" style="grid-template-columns:1.3fr .9fr;gap:22px">
     <div>
+      <div class="card pad" style="margin-bottom:16px">
+        <div class="section-title" style="margin-bottom:12px">Ficha de identificación</div>
+        <div class="grid3" style="gap:10px">
+          ${inp('fi_lugar_nacimiento','Lugar de nacimiento','Ciudad, estado')}
+          ${inp('fi_nacionalidad','Nacionalidad','p. ej. mexicana')}
+          ${inp('fi_estado_civil','Estado civil','Soltera, casada…')}
+        </div>
+        <div class="grid3" style="gap:10px">
+          ${inp('fi_religion','Religión','—')}
+          ${inp('fi_escolaridad','Escolaridad','Último grado de estudios')}
+          ${inp('fi_ocupacion','Ocupación','A qué se dedica')}
+        </div>
+        ${inp('fi_domicilio','Domicilio','Calle y número, colonia, alcaldía/municipio, CP, ciudad')}
+      </div>
       <div class="card pad" style="margin-bottom:16px">
         <div class="section-title" style="margin-bottom:12px">Antecedentes</div>
         ${ta('heredofamiliares','Heredo-familiares','Cáncer u otras enfermedades relevantes en la familia')}
         ${ta('patologicos','Personales patológicos','Enfermedades previas o crónicas, en tratamiento…')}
-        ${ta('quirurgicos','Quirúrgicos','Cirugías previas con fecha y detalles…')}
         ${ta('no_patologicos','Personales no patológicos','Tabaquismo, alcohol, ejercicio, ocupación…')}
-        ${esF?ta('gineco_obstetricos','Gineco-obstétricos','Menarca, G/P/A/C, menopausia, mastografías…'):''}
+        ${ta('quirurgicos','Quirúrgicos','Cirugías previas con fecha y detalles…')}
+        ${gineco}
       </div>
     </div>
     <div>
+      <div class="card pad" style="margin-bottom:14px">
+        <div class="section-title" style="margin-bottom:10px">Padecimiento actual</div>
+        <textarea class="input" data-ant="padecimiento_actual" rows="6" style="min-height:130px;resize:vertical" placeholder="Inicio y evolución del padecimiento, síntomas, hallazgos y estado actual…">${esc(f.padecimiento_actual||'')}</textarea>
+      </div>
       <div class="card pad" style="margin-bottom:14px;border-color:var(--danger-soft);background:linear-gradient(180deg,#fff,#fffafa)">
         <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px"><span class="flag" style="background:var(--danger)"></span><b style="color:var(--danger);font-size:13px">Alergias</b></div>
         <textarea class="input" data-ant="alergias" rows="3" style="min-height:80px;resize:vertical" placeholder="Medicamentos o alimentos, reacción y severidad…">${esc(f.alergias||'')}</textarea>
