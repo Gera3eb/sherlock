@@ -2300,7 +2300,10 @@ function actualizarMolecular(){
 }
 
 /* ---- Informe ---- */
-// Informe médico de paciente real: mismo formato visual, datos del expediente.
+// Informe médico de paciente real: documento completo armado con TODO lo
+// capturado en el expediente (ficha, padecimiento, antecedentes, exploración,
+// diagnóstico con perfil molecular y ganglios, tratamientos con ciclos y plan).
+// Solo se imprimen las secciones con datos: nada se inventa.
 function tabInformeReal(exp){
   const d=curDoc();
   const pac=exp.paciente||{};
@@ -2309,26 +2312,98 @@ function tabInformeReal(exp){
   const sexoTxt=pac.sexo==='F'?'Femenino':pac.sexo==='M'?'Masculino':'—';
   const edad=edadDesde(pac.fecha_nacimiento);
   const bv=v=>(v==null||v==='')?'—':esc(String(v));
+  const filled=v=>v!=null&&String(v).trim()!=='';
   const hoy=new Date();
   const fechaHoy=`${String(hoy.getDate()).padStart(2,'0')}/${String(hoy.getMonth()+1).padStart(2,'0')}/${hoy.getFullYear()}`;
   const folio=`SHK-${hoy.getFullYear()}-${String(pac.id||0).padStart(4,'0')}`;
-  // Diagnóstico y perfil molecular desde el dx guardado (sin inventar si no hay).
+
+  // Ficha de identificación: solo los campos capturados, a dos columnas.
+  const fichaPares=[
+    ['Lugar de nacimiento',datos.fi_lugar_nacimiento],['Nacionalidad',datos.fi_nacionalidad],
+    ['Estado civil',datos.fi_estado_civil],['Religión',datos.fi_religion],
+    ['Escolaridad',datos.fi_escolaridad],['Ocupación',datos.fi_ocupacion],['Domicilio',datos.fi_domicilio],
+  ].filter(x=>filled(x[1]));
+  const secFicha=fichaPares.length
+    ? `<div class="rep-sec"><h4>Ficha de identificación</h4><div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 24px">${
+        fichaPares.map(x=>`<p style="margin:2px 0"><b>${x[0]}:</b> ${esc(x[1])}</p>`).join('')}</div></div>` : '';
+
+  const secTexto=(titulo,val)=> filled(val)
+    ? `<div class="rep-sec"><h4>${titulo}</h4><p style="white-space:pre-wrap">${esc(val)}</p></div>` : '';
+
+  // Gineco-obstétricos: resumen en una línea desde los campos estructurados.
+  const gin=[];
+  if(filled(datos.gineco_menarca)) gin.push(`Menarca ${datos.gineco_menarca}`);
+  const gpac=[['G',datos.gineco_gestas],['P',datos.gineco_partos],['A',datos.gineco_abortos],['C',datos.gineco_cesareas]]
+    .filter(x=>filled(x[1])).map(x=>x[0]+String(x[1]).trim()).join('');
+  if(gpac) gin.push(gpac);
+  if(filled(datos.gineco_menopausia)) gin.push(`Menopausia ${datos.gineco_menopausia}`);
+  if(filled(datos.gineco_hormonales)) gin.push(`Hormonales: ${datos.gineco_hormonales}`);
+  if(filled(datos.gineco_obstetricos)) gin.push(String(datos.gineco_obstetricos).trim());
+  const antPares=[
+    ['Heredo-familiares',datos.heredofamiliares],
+    ['Personales patológicos',datos.patologicos],
+    ['Personales no patológicos',datos.no_patologicos],
+    ['Quirúrgicos',datos.quirurgicos],
+    ['Gineco-obstétricos',gin.join(' · ')],
+    ['Alergias',datos.alergias],
+  ].filter(x=>filled(x[1]));
+  const secAnt=antPares.length
+    ? `<div class="rep-sec"><h4>Antecedentes</h4>${antPares.map(x=>`<p style="margin:2px 0"><b>${x[0]}:</b> ${esc(x[1])}</p>`).join('')}</div>` : '';
+
+  // Exploración: signos vitales de la última nota VIGENTE (misma fuente y
+  // versión que la pestaña Exploración: si hubo corrección, manda la corrección)
+  // + BSA/IMC derivados con los mismos helpers (talla puede venir en metros).
+  const notasListas=S.notasCargadas&&S.notasFor===String(S.patient);
+  const gExpl=notasListas?(notasAgrupadas(S.notas)[0]||null):null;
+  const e=gExpl?notaEfectiva(gExpl):{};
+  const fexpl=gExpl?(e.fecha_hora||gExpl.original.fecha_hora):null;
+  const vit=[
+    filled(e.ta)?`TA ${e.ta} mmHg`:null,
+    filled(e.fc)?`FC ${e.fc} lpm`:null, filled(e.fr)?`FR ${e.fr} rpm`:null,
+    filled(e.temperatura)?`Temp ${e.temperatura} °C`:null, filled(e.sato2)?`SatO₂ ${e.sato2}%`:null,
+    filled(e.peso)?`Peso ${e.peso} kg`:null, filled(e.talla)?`Talla ${e.talla}`:null,
+  ].filter(Boolean).map(x=>esc(x)).join(' · ');
+  const pesoKg=numDeTexto(e.peso), tallaCm=tallaACm(e.talla);
+  const calcTxt=(pesoKg!=null&&tallaCm!=null)
+    ? ` BSA ${Math.sqrt(tallaCm*pesoKg/3600).toFixed(2)} m² · IMC ${(pesoKg/Math.pow(tallaCm/100,2)).toFixed(1)}.` : '';
+  const secExpl=vit?`<div class="rep-sec"><h4>Exploración · signos vitales</h4><p>${vit}.${calcTxt}</p>${filled(fexpl)?`<p style="font-size:11.5px;color:var(--muted);margin:3px 0 0">Registrados: ${esc(fechaHoraES(fexpl))}</p>`:''}</div>`:'';
+
+  // Diagnóstico, etapa y perfil molecular (con cruces y ganglios analizados).
   let secDiag, secMol='';
   if(dx){
     const bm=dx.biomarcadores||{};
-    const her2txt=bm.her2==='pos'?'positivo (3+)':bm.her2==='low'?'2+ (HER2-low)':bm.her2==='neg'?'negativo':'—';
-    secDiag=`<div class="rep-sec"><h4>Diagnóstico</h4><p>${esc(dx.tipo_histologico||'Carcinoma de mama')}${dx.subtipo?`, ${esc(dx.subtipo)}`:''}${dx.grado?`, grado histológico ${esc(dx.grado)}`:''}. Estadificación clínica <b>${bv(dx.t)} ${bv(dx.n)} ${bv(dx.m)}</b> — <b>Etapa ${bv(dx.etapa)}</b>${dx.edicion_ajcc?` (AJCC ${esc(String(dx.edicion_ajcc))}ª ed.)`:''}.</p></div>`;
-    secMol=`<div class="rep-sec"><h4>Perfil molecular</h4><p>RE ${bv(bm.re)}${bm.re!=null&&bm.re!==''?'%':''} · RP ${bv(bm.rp)}${bm.rp!=null&&bm.rp!==''?'%':''} · HER2 ${her2txt} · Ki-67 ${bv(bm.ki67)}${bm.ki67!=null&&bm.ki67!==''?'%':''}.</p></div>`;
+    const her2txt=bm.her2==='pos'?'positivo (3+)':bm.her2==='low'?'2+ (HER2-low)':bm.her2==='neg'?'negativo':null;
+    secDiag=`<div class="rep-sec"><h4>Diagnóstico</h4>
+      <p>${esc(dx.tipo_histologico||'Carcinoma de mama')}${dx.subtipo?`, ${esc(dx.subtipo)}`:''}${dx.grado?`, grado histológico ${esc(dx.grado)}`:''}${dx.tamano_mm!=null&&dx.tamano_mm!==''?`, tumor de ${bv(mmACm(dx.tamano_mm))} cm`:''}.</p>
+      <p style="margin-top:4px">Estadificación clínica <b>${bv(dx.t)} ${bv(dx.n)} ${bv(dx.m)}</b> — <b style="font-size:15px">Etapa ${bv(dx.etapa)}</b>${dx.edicion_ajcc?` (AJCC ${esc(String(dx.edicion_ajcc))}ª ed.)`:''}.</p></div>`;
+    const rec=(lbl,pct,cr)=>{
+      const partes=[]; if(filled(pct)) partes.push(`${esc(String(pct))}%`); if(filled(cr)) partes.push(esc(String(cr)));
+      return partes.length?`${lbl} ${partes.join(' (')+(partes.length>1?')':'')}`:null;
+    };
+    const molItems=[rec('RE',bm.re,bm.re_cruces),rec('RP',bm.rp,bm.rp_cruces),
+      her2txt?`HER2 ${her2txt}`:null, filled(bm.ki67)?`Ki-67 ${esc(String(bm.ki67))}%`:null].filter(Boolean);
+    const gl=[];
+    if(bm.gl_sin_mets!=null&&bm.gl_sin_mets!=='') gl.push(`${esc(String(bm.gl_sin_mets))} sin metástasis`);
+    if(bm.gl_con_mets!=null&&bm.gl_con_mets!=='') gl.push(`${esc(String(bm.gl_con_mets))} con metástasis`);
+    secMol=(molItems.length||gl.length)?`<div class="rep-sec"><h4>Perfil molecular y patología</h4>
+      ${molItems.length?`<p>${molItems.join(' · ')}.</p>`:''}
+      ${gl.length?`<p style="margin-top:3px">Ganglios analizados: ${gl.join(' · ')}.</p>`:''}</div>`:'';
   } else {
     secDiag=`<div class="rep-sec"><h4>Diagnóstico</h4><p style="color:var(--muted)">Sin diagnóstico registrado aún.</p></div>`;
   }
-  // Resumen clínico con datos reales (tamaño tumoral y antecedentes relevantes).
-  const hf=datos.heredofamiliares, al=datos.alergias;
-  const resumen=`Paciente ${esc(pac.nombre||'—')}, ${sexoTxt}${edad!=null?`, ${edad} años`:''}.`
-    + (dx&&dx.tamano_mm!=null?` Tumoración mamaria de ${bv(mmACm(dx.tamano_mm))} cm.`:'')
-    + (hf?` Antecedentes heredo-familiares: ${esc(hf)}.`:'')
-    + (al?` Alergias: ${esc(al)}.`:'');
+
+  // Tratamientos con ciclos fechados (se cargan al abrir la pestaña).
+  const tratListos=S.tratamientosCargados&&S.tratamientosFor===String(S.patient);
+  const tratHTML=!tratListos
+    ? `<p style="color:var(--muted)">Cargando tratamientos…</p>`
+    : (S.tratamientos.length
+        ? S.tratamientos.map(t=>{
+            const ciclos=(Array.isArray(t.ciclos)?t.ciclos:[]).map(c=>`${esc(c.numero||'—')} ${esc(fechaDMY(c.fecha))}`).join(', ');
+            return `<p style="margin:2px 0"><b>${esc(t.nombre||'—')}</b>${t.tipo?` (${esc(t.tipo)})`:''}${ciclos?`: ${ciclos}`:''}</p>`;
+          }).join('')
+        : `<p style="color:var(--muted)">Sin tratamientos registrados.</p>`);
   const plan=(dx&&dx.plan)?esc(dx.plan):'Plan de tratamiento pendiente de registro.';
+
   return `<div class="report-actions" style="display:flex;gap:10px;margin-bottom:16px">
       <button class="btn btn-brass" data-print>${ICN.print} Imprimir / PDF</button>
       <button class="btn btn-ghost">${ICN.doc} Versión para aseguradora</button>
@@ -2347,18 +2422,24 @@ function tabInformeReal(exp){
         </div>
       </div>
       <div class="rep-body">
+        <div style="text-align:center;font-family:var(--serif);font-size:22px;font-weight:600;color:var(--petrol);margin-bottom:16px">INFORME MÉDICO</div>
         <div style="display:flex;justify-content:space-between;margin-bottom:18px">
-          <div><div style="font-family:var(--serif);font-size:20px;font-weight:600">${esc(pac.nombre||'—')}</div><div style="font-size:12.5px;color:var(--slate)">${sexoTxt}${edad!=null?` · ${edad} años`:''}</div></div>
+          <div><div style="font-family:var(--serif);font-size:20px;font-weight:600">${esc(pac.nombre||'—')}</div>
+            <div style="font-size:12.5px;color:var(--slate)">${sexoTxt}${edad!=null?` · ${edad} años`:''}${pac.fecha_nacimiento?` · Nac. ${esc(fechaDMY(pac.fecha_nacimiento))}`:''}</div></div>
           <div style="text-align:right;font-size:12px;color:var(--slate)"><div>Folio: <span class="mono">${esc(folio)}</span></div><div>Fecha: ${fechaHoy}</div></div>
         </div>
+        ${secFicha}
+        ${secTexto('Padecimiento actual',datos.padecimiento_actual)}
+        ${secAnt}
+        ${secExpl}
         ${secDiag}
         ${secMol}
-        <div class="rep-sec"><h4>Resumen clínico</h4><p>${resumen}</p></div>
-        <div class="rep-sec"><h4>Plan de tratamiento</h4><p>${plan}</p></div>
+        <div class="rep-sec"><h4>Tratamiento</h4>${tratHTML}</div>
+        <div class="rep-sec"><h4>Plan</h4><p>${plan}</p></div>
       </div>
       <div class="rep-foot">
         <div>Documento generado por Sherlock · válido con firma del médico tratante.</div>
-        <div class="sig">${esc(d.name)}<br><span style="font-size:11px;color:var(--muted)">${esc(d.spec)}</span></div>
+        <div class="sig">${esc(d.name)}<br><span style="font-size:11px;color:var(--muted)">${esc(d.spec)} · Céd. ${esc(d.cedula)}</span></div>
       </div>
     </div>`;
 }
@@ -2366,7 +2447,13 @@ function tabInforme(p){
   // Paciente real (id numérico): informe armado con los datos guardados.
   const num=esNumId(S.patient);
   const real=(num && S.expediente && S.expediente.paciente && String(S.expediente.paciente.id)===String(S.patient)) ? S.expediente : null;
-  if(real) return tabInformeReal(real);
+  if(real){
+    // El informe lista tratamientos con ciclos y los signos vitales de la última
+    // nota: carga ambos si aún no están (mismo estado que Evolución/Exploración).
+    if(S.tratamientosFor!==String(S.patient) && !S.tratamientosCargando) cargarTratamientos(S.patient);
+    if(S.notasFor!==String(S.patient) && !S.notasCargando) cargarNotas(S.patient);
+    return tabInformeReal(real);
+  }
   if(num) return `<div class="card pad"><p class="lead" style="margin:0">Cargando expediente…</p></div>`;
   // Paciente demo: informe ilustrativo original (sin API).
   const s=S.stage,b=S.bio;
