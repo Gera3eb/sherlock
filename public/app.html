@@ -412,6 +412,8 @@ const S={
   modalCiclo:false, cicloForm:null, cicloGuardando:false, cicloError:'',
   // Corrección de una nota (addendum: no sobrescribe, agrega — ver migración 006).
   modalCorr:false, corrForm:null, corrGuardando:false, corrError:'',
+  // Vista de documento: id de la nota abierta como "Nota de evolución" imprimible.
+  notaAbierta:null,
   antForm:null, antGuardando:false, antMsg:'',
   estudForm:null, estudGuardando:false, estudMsg:'', estudAbierto:false,
   npForm:{ nombre:'', sexo:'F', fecha_nacimiento:'', telefono:'', correo:'', seguro:'', dx_resumen:'' },
@@ -1580,6 +1582,16 @@ function fechaHoraES(iso){
   const s=d.toLocaleString('es-MX',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
   return s.charAt(0).toUpperCase()+s.slice(1);
 }
+// Fecha/hora destacada para el encabezado del documento de nota, en mayúsculas:
+// "MIÉRCOLES 24 JUNIO 2026 - 23:12 HRS".
+function fechaHoraDoc(iso){
+  if(!iso) return '—';
+  const d=new Date(String(iso));
+  if(isNaN(d)) return String(iso);
+  const f=d.toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  const t=d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit',hour12:false});
+  return `${f.replace(/,/g,'').replace(/ de /g,' ').toUpperCase()} - ${t} HRS`;
+}
 
 // Estudios reales del paciente: lista por categoría (mismo diseño de tablas) y
 // formulario de alta conectado a la API. Captura con foco quirúrgico.
@@ -1718,7 +1730,8 @@ function evolNotaCard(g){
   const o=g.original, corr=g.correcciones, corregida=corr.length>0;
   const badge = corregida
     ? `<span class="chip chip-warn" style="font-size:11px">Corregida${corr.length>1?` · ${corr.length}`:''}</span>` : '';
-  const btn = `<button class="btn btn-ghost" data-corregir="${esc(o.id)}" style="margin-left:auto;padding:6px 11px;font-size:12px">${ICN.doc} Corregir</button>`;
+  const verBtn = `<button class="btn btn-ghost" data-ver-nota="${esc(o.id)}" style="margin-left:auto;padding:6px 11px;font-size:12px">Ver nota →</button>`;
+  const btn = `<button class="btn btn-ghost" data-corregir="${esc(o.id)}" style="padding:6px 11px;font-size:12px">${ICN.doc} Corregir</button>`;
   const bloques = corr.map(c=>`
     <div style="margin-top:13px;padding-left:13px;border-left:2px solid var(--brass)">
       <b style="font-size:12.5px;color:var(--brass-deep)">Corrección · ${esc(fechaHoraES(c.creado))}</b>
@@ -1729,17 +1742,133 @@ function evolNotaCard(g){
     <div style="display:flex;align-items:center;gap:9px;margin-bottom:4px;flex-wrap:wrap">
       <span style="color:var(--petrol)">${ICN.doc}</span>
       <b style="font-size:13px">${esc(fechaHoraES(o.fecha_hora))}</b>
-      ${badge}${btn}
+      ${badge}${verBtn}${btn}
     </div>
     ${corregida?`<div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-top:7px">Versión original</div>`:''}
     <div style="${corregida?'opacity:.6':''}">${notaCuerpo(o)}</div>
     ${bloques}
   </div>`;
 }
+// Vista de documento de una nota (formato Dra. Escobar), imprimible.
+// Reusa el contenedor .report y .report-actions del informe médico: el @media
+// print existente la deja limpia (oculta sidebar/topbar/tabs y los botones).
+function vistaNotaDocumento(n, corregida){
+  const d=curDoc();
+  const exp=S.expediente||{};
+  const pac=exp.paciente||{};
+  const dx=exp.diagnostico;
+  const datos=(exp.antecedentes&&exp.antecedentes.datos)||{};
+  const sexoTxt=pac.sexo==='F'?'Femenino':pac.sexo==='M'?'Masculino':'—';
+  const edad=edadDesde(pac.fecha_nacimiento);
+
+  // (e) Signos vitales en una línea (omite vacíos).
+  const vit=[['TA',n.ta],['FC',n.fc],['SatO2',n.sato2],['FR',n.fr],['Temp',n.temperatura],['Peso',n.peso],['Talla',n.talla]]
+    .filter(x=>x[1]!=null && String(x[1]).trim()!=='')
+    .map(x=>`${x[0]} ${esc(x[1])}`).join(' · ');
+
+  // (f) Antecedentes presentes en el expediente.
+  const antLabels=[['heredofamiliares','Heredo-familiares'],['patologicos','Personales patológicos'],
+    ['quirurgicos','Quirúrgicos'],['no_patologicos','Personales no patológicos'],
+    ['gineco_obstetricos','Gineco-obstétricos'],['alergias','Alergias']];
+  const antItems=antLabels
+    .filter(([k])=>datos[k]!=null && String(datos[k]).trim()!=='')
+    .map(([k,lbl])=>`<p style="margin:2px 0"><b>${lbl}:</b> ${esc(datos[k])}</p>`).join('');
+
+  // (g/h) Diagnóstico y etapa clínica desde el dx guardado (sin inventar).
+  let diagTxt, etapa='—', molTxt='';
+  if(dx){
+    const bv=v=>(v==null||v==='')?'—':esc(String(v));
+    diagTxt=`${esc(dx.tipo_histologico||'Carcinoma de mama')}${dx.subtipo?`, ${esc(dx.subtipo)}`:''}${dx.grado?`, grado ${esc(dx.grado)}`:''}. `
+      + `Estadificación <b>${bv(dx.t)} ${bv(dx.n)} ${bv(dx.m)}</b>.`;
+    etapa=bv(dx.etapa);
+    const bm=dx.biomarcadores||{};
+    const her2txt=bm.her2==='pos'?'positivo (3+)':bm.her2==='low'?'2+ (HER2-low)':bm.her2==='neg'?'negativo':null;
+    const mol=[];
+    if(bm.re!=null&&bm.re!=='') mol.push(`RE ${bv(bm.re)}%`);
+    if(bm.rp!=null&&bm.rp!=='') mol.push(`RP ${bv(bm.rp)}%`);
+    if(her2txt) mol.push(`HER2 ${her2txt}`);
+    if(bm.ki67!=null&&bm.ki67!=='') mol.push(`Ki-67 ${bv(bm.ki67)}%`);
+    if(mol.length) molTxt=`<p style="margin:6px 0 0;color:var(--slate)">${mol.join(' · ')}.</p>`;
+  } else {
+    diagTxt='Sin diagnóstico registrado.';
+  }
+
+  // (i) Tratamientos con sus ciclos fechados en línea.
+  const trat = S.tratamientos.length
+    ? S.tratamientos.map(t=>{
+        const ciclos=(Array.isArray(t.ciclos)?t.ciclos:[])
+          .map(c=>`${esc(c.numero||'—')} ${esc(fechaDMY(c.fecha))}`).join(', ');
+        return `<p style="margin:2px 0"><b>${esc(t.nombre||'—')}</b>${t.tipo?` (${esc(t.tipo)})`:''}${ciclos?`: ${ciclos}`:''}</p>`;
+      }).join('')
+    : `<p style="margin:2px 0;color:var(--muted)">Sin tratamientos registrados</p>`;
+
+  // (j) Textos clínicos de la nota (omite vacíos, con su encabezado de sección).
+  const sec=(titulo,val)=> (val!=null && String(val).trim()!=='')
+    ? `<div class="rep-sec"><h4>${titulo}</h4><p style="white-space:pre-wrap">${esc(val)}</p></div>` : '';
+
+  return `<div class="report-actions" style="display:flex;gap:10px;margin-bottom:16px">
+      <button class="btn btn-ghost" data-volver-nota>${ICN.back} Volver</button>
+      <button class="btn btn-brass" data-print>${ICN.print} Imprimir / PDF</button>
+    </div>
+    <div class="report">
+      <div class="rep-head">
+        <div>
+          <div style="display:flex;align-items:center;gap:10px"><div class="mark" style="width:34px;height:34px;border-radius:9px;background:var(--petrol);display:grid;place-items:center">${markSVG()}</div>
+          <div><div style="font-family:var(--serif);font-weight:600;font-size:18px;color:var(--petrol)">Top Oncology</div><div style="font-size:11px;color:var(--muted)">Hospital Ángeles Pedregal · CDMX</div></div></div>
+        </div>
+        <div style="text-align:right;font-size:12px;color:var(--slate)">
+          <div style="font-weight:600;color:var(--ink)">${esc(d.name)}</div>
+          <div>${esc(d.spec)}</div>
+          <div class="mono" style="margin-top:3px">Céd. prof. ${esc(d.cedula)} · Esp. ${esc(d.ced_esp)}</div>
+        </div>
+      </div>
+      <div class="rep-body">
+        <div style="text-align:center;font-family:var(--serif);font-weight:600;font-size:13px;letter-spacing:.06em;color:var(--brass-deep);margin-bottom:4px">${esc(fechaHoraDoc(n.fecha_hora))}</div>
+        <div style="text-align:center;font-family:var(--serif);font-size:22px;font-weight:600;color:var(--petrol);margin-bottom:${corregida?'6px':'18px'}">NOTA DE EVOLUCIÓN</div>
+        ${corregida?`<div style="text-align:center;margin-bottom:16px"><span class="chip chip-warn" style="font-size:11px">Versión corregida (vigente)</span></div>`:''}
+
+        <div class="rep-sec"><h4>Paciente</h4>
+          <p><b style="font-size:15px">${esc(pac.nombre||'—')}</b><br>
+          ${sexoTxt}${edad!=null?` · ${edad} años`:''}${pac.fecha_nacimiento?` · Nac. ${esc(fechaDMY(pac.fecha_nacimiento))}`:''}</p></div>
+
+        ${vit?`<div class="rep-sec"><h4>Signos vitales</h4><p>${vit}</p></div>`:''}
+
+        ${antItems?`<div class="rep-sec"><h4>Antecedentes</h4>${antItems}</div>`:''}
+
+        <div class="rep-sec"><h4>Diagnóstico</h4><p>${diagTxt}</p>${molTxt}</div>
+
+        <div class="rep-sec"><h4>Etapa clínica</h4>
+          <p style="font-family:var(--serif);font-size:18px;font-weight:600;color:var(--petrol)">Etapa ${etapa}</p></div>
+
+        <div class="rep-sec"><h4>Tratamiento</h4>${trat}</div>
+
+        ${sec('Síntomas',n.sintomas)}
+        ${sec('Exploración física',n.exploracion)}
+        ${sec('Evolutivo',n.evolutivo)}
+        ${sec('Plan',n.plan)}
+      </div>
+      <div class="rep-foot">
+        <div>Documento generado por Sherlock · válido con firma del médico tratante.</div>
+        <div class="sig">${esc(d.name)}<br><span style="font-size:11px;color:var(--muted)">${esc(d.spec)} · Céd. ${esc(d.cedula)}</span></div>
+      </div>
+    </div>`;
+}
 function tabEvolucionReal(){
   const tratListos = S.tratamientosCargados && S.tratamientosFor===String(S.patient);
   const notasListas = S.notasCargadas && S.notasFor===String(S.patient);
   const cargando = `<div class="card pad"><p class="lead" style="margin:0">Cargando…</p></div>`;
+
+  // Si hay una visita abierta como documento, se muestra esa vista en lugar de la
+  // lista. notaAbierta guarda el id de la nota ORIGINAL (ancla de la visita); el
+  // documento imprime la versión VIGENTE (última corrección si la hubo).
+  if(S.notaAbierta!=null && notasListas){
+    const g=notasAgrupadas(S.notas).find(x=>String(x.original.id)===String(S.notaAbierta));
+    if(g){
+      const n=notaEfectiva(g);
+      return vistaNotaDocumento({...n, fecha_hora:n.fecha_hora||g.original.fecha_hora}, g.correcciones.length>0);
+    }
+    S.notaAbierta=null; // la visita ya no existe (o cambió el paciente): cae a la lista
+  }
 
   const tratSec = !tratListos ? cargando
     : (S.tratamientos.length ? S.tratamientos.map(evolTratamientoCard).join('')
@@ -2330,6 +2459,10 @@ function bind(){
     const k=el.getAttribute('data-cita'); S.citaForm[k]=el.value;
     if(k==='titulo') S.citaForm.tituloManual = el.value.trim()!=='';
   });
+
+  // Evolución · abrir una nota como documento imprimible y volver a la lista.
+  document.querySelectorAll('[data-ver-nota]').forEach(el=>el.onclick=()=>{S.notaAbierta=el.getAttribute('data-ver-nota');render();window.scrollTo(0,0);});
+  document.querySelectorAll('[data-volver-nota]').forEach(el=>el.onclick=()=>{S.notaAbierta=null;render();});
 
   // Evolución · captura: abrir modales (nota, tratamiento, ciclo por tratamiento)
   document.querySelectorAll('[data-evol-nota]').forEach(el=>el.onclick=()=>abrirModalNota());

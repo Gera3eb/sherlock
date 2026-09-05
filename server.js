@@ -1027,4 +1027,13 @@ app.use('/assets', requireAuth, express.static(path.join(PUBLIC, 'assets')));
 // Salud (para verificación de despliegue)
 app.get('/healthz', (req, res) => res.json({ ok: true, service: 'sherlock' }));
 
+// Fallback: rutas no reconocidas (bookmarks viejos, 404 cacheados, /app.html, etc.)
+// - API desconocida -> 404 JSON (no redirigir peticiones de datos)
+// - resto -> a la app si hay sesión; si no, al login
+app.use((req, res) => {
+  if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'not_found' });
+  if (req.session && req.session.user) return res.redirect('/');
+  return res.redirect('/login');
+});
+
 app.listen(PORT, () => console.log(`[Sherlock] escuchando en http://localhost:${PORT}`));
