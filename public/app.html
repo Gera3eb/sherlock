@@ -418,7 +418,7 @@ const S={
   estudForm:null, estudGuardando:false, estudMsg:'', estudAbierto:false,
   npForm:{ nombre:'', sexo:'F', fecha_nacimiento:'', telefono:'', correo:'', seguro:'', dx_resumen:'' },
   stage:{ size:18, skin:false, chest:false, inflam:false, axilar:true, fixed:false, intmam:false, infracl:false, supracl:false, mets:'no', edition:'8' },
-  bio:{ re:90, rp:80, her2:'neg', ki67:22, grade:'2', subtype:0, sentinel:'si', axdiss:'no' }
+  bio:{ re:90, rp:80, re_cruces:'3+', rp_cruces:'2+', her2:'neg', ki67:22, grade:'2', subtype:0, sentinel:'si', axdiss:'no', gl_sin:'', gl_con:'' }
 };
 const app=document.getElementById('app');
 function go(r){ S.route=r; render(); window.scrollTo(0,0); }
@@ -872,6 +872,10 @@ function prefillDesdeDiagnostico(dx){
   const b=S.bio, s=S.stage, bm=dx.biomarcadores||{};
   if(bm.re!=null)   b.re=bm.re;
   if(bm.rp!=null)   b.rp=bm.rp;
+  b.re_cruces=bm.re_cruces||'';
+  b.rp_cruces=bm.rp_cruces||'';
+  b.gl_sin=bm.gl_sin_mets!=null?bm.gl_sin_mets:'';
+  b.gl_con=bm.gl_con_mets!=null?bm.gl_con_mets:'';
   if(bm.her2!=null) b.her2=bm.her2;
   if(bm.ki67!=null) b.ki67=bm.ki67;
   if(dx.grado)      b.grade=String(dx.grado);
@@ -920,7 +924,10 @@ async function guardarDiagnostico(){
     grado:String(b.grade),
     t, n, m, etapa,
     tamano_mm: Number.isFinite(mm)?mm:null,
-    biomarcadores:{ re:b.re, rp:b.rp, her2:b.her2, ki67:b.ki67 },
+    biomarcadores:{ re:b.re, rp:b.rp, re_cruces:b.re_cruces||null, rp_cruces:b.rp_cruces||null,
+      her2:b.her2, ki67:b.ki67,
+      gl_sin_mets:(b.gl_sin===''||b.gl_sin==null)?null:b.gl_sin,
+      gl_con_mets:(b.gl_con===''||b.gl_con==null)?null:b.gl_con },
     plan:null,
     edicion_ajcc:String(s.edition)
   };
@@ -2152,6 +2159,15 @@ function pasosDeduccion(T,N,M){
 function pasosHTML(steps){
   return steps.map((t,i)=>`<div class="deduce" style="animation-delay:${i*0.07}s"><div class="dn">${i%2===0?(i/2+1):'·'}</div><div class="dt">${t}</div></div>`).join('');
 }
+// Renglón de receptor hormonal: porcentaje de positividad + cruces de intensidad.
+function rowReceptor(label,kPct,kCruces,b){
+  const ops=['','1+','2+','3+'].map(o=>`<option value="${o}" ${(b[kCruces]||'')===o?'selected':''}>${o||'— cruces'}</option>`).join('');
+  return `<div class="bio-row"><div class="bl">${label}<div style="font-size:10.5px;color:var(--muted);font-weight:400">% positividad · cruces de intensidad</div></div>
+    <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end">
+      <input class="input" type="number" min="0" max="100" value="${b[kPct]}" data-bio-num="${kPct}" style="text-align:center;padding:7px;width:72px"><span style="font-size:12px;color:var(--muted)">%</span>
+      <select class="select" data-bio-cruces="${kCruces}" style="width:auto;padding:7px 26px 7px 9px;font-size:12.5px">${ops}</select>
+    </div></div>`;
+}
 function tabDiagnostico(p){
   const s=S.stage, b=S.bio;
   const T=computeT(s),N=computeN(s),M=computeM(s);
@@ -2180,6 +2196,12 @@ function tabDiagnostico(p){
         ${chk('intmam','Adenopatías de mamaria interna')}
         ${chk('infracl','Adenopatías infraclaviculares')}
         ${chk('supracl','Adenopatías supraclaviculares')}
+        <div style="border-top:1px solid var(--paper-2);margin-top:6px;padding-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div class="field" style="margin-bottom:0"><label>Ganglios analizados sin metástasis</label>
+            <input class="input" type="number" min="0" value="${esc(b.gl_sin??'')}" data-bio-num="gl_sin" style="text-align:center;padding:7px"></div>
+          <div class="field" style="margin-bottom:0"><label>Ganglios analizados con metástasis</label>
+            <input class="input" type="number" min="0" value="${esc(b.gl_con??'')}" data-bio-num="gl_con" style="text-align:center;padding:7px"></div>
+        </div>
       </div>
       <div class="card pad">
         <div class="section-title" style="margin-bottom:10px">Metástasis (M)</div>
@@ -2206,6 +2228,10 @@ function tabDiagnostico(p){
             <div><div class="sl">Etapa clínica</div><div class="sv" id="stage-sv">${grp.s}</div></div>
             <div class="sd" id="stage-sd">${grp.d}</div>
           </div>
+          <div style="margin-top:12px;padding:13px 15px;border-radius:11px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15)">
+            <div style="font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#8FBDBC">Clasificación molecular</div>
+            <div id="mol-sugerida" style="font-family:var(--serif);font-size:19px;color:#fff;font-weight:600;margin-top:3px">${molSubtype(b)}</div>
+          </div>
           <div style="display:flex;align-items:center;gap:10px;margin-top:14px">
             <span style="font-size:11.5px;color:#8FBDBC">Criterio:</span>
             <select class="select" data-stage-ed style="width:auto;background-color:rgba(255,255,255,.07);border-color:rgba(255,255,255,.15);color:#fff;font-size:12px;padding:6px 28px 6px 10px">
@@ -2222,16 +2248,12 @@ function tabDiagnostico(p){
           <select class="select" data-bio="subtype">${SUBTIPOS.map((x,i)=>`<option ${b.subtype===i?'selected':''}>${x}</option>`).join('')}</select></div>
         <div class="field"><label>Grado histológico</label>
           <div class="seg">${['1','2','3'].map(g=>`<button class="${b.grade===g?'on':''}" data-bio-grade="${g}">G${g}</button>`).join('')}</div></div>
-        <div class="bio-row"><div class="bl">Receptor de estrógenos (RE)</div><div><input class="input" type="number" value="${b.re}" data-bio-num="re" style="text-align:center;padding:7px"> </div></div>
-        <div class="bio-row"><div class="bl">Receptor de progesterona (RP)</div><div><input class="input" type="number" value="${b.rp}" data-bio-num="rp" style="text-align:center;padding:7px"></div></div>
+        ${rowReceptor('Receptor de estrógenos (RE)','re','re_cruces',b)}
+        ${rowReceptor('Receptor de progesterona (RP)','rp','rp_cruces',b)}
         <div class="bio-row" style="grid-template-columns:1fr;gap:7px"><div class="bl">HER2 (IHQ)</div><div class="seg">${her2opts}</div></div>
         <div class="bio-row"><div class="bl">Ki-67</div><div><input class="input" type="number" value="${b.ki67}" data-bio-num="ki67" style="text-align:center;padding:7px"></div></div>
         <div class="divider"></div>
         <div class="bio-row"><div class="bl">Ganglio centinela realizado</div><div><span class="chip ${b.sentinel==='si'?'chip-ok':'chip-line'}">${b.sentinel==='si'?'Sí':'No'}</span></div></div>
-        <div style="margin-top:14px;padding:13px;border-radius:11px;background:var(--paper-2);border:1px solid var(--line)">
-          <div style="font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)">Clasificación molecular sugerida</div>
-          <div id="mol-sugerida" style="font-family:var(--serif);font-size:18px;color:var(--petrol);font-weight:600;margin-top:3px">${molSubtype(b)}</div>
-        </div>
       </div>
       <div class="note" style="margin-top:14px">${ICN.info}<div>Herramienta de apoyo. La etapa y la clasificación son una propuesta a partir de los datos capturados; <b>la decisión clínica final siempre es del médico tratante.</b></div></div>
     </div>
@@ -2534,6 +2556,8 @@ function bind(){
   // Biomarcadores numéricos (RE/RP/Ki-67): actualiza S y refresca el subtipo
   // molecular SIN render() (conserva foco; antes no estaban enganchados a S.bio).
   document.querySelectorAll('[data-bio-num]').forEach(el=>el.oninput=()=>{S.bio[el.getAttribute('data-bio-num')]=el.value;actualizarMolecular();});
+  // Cruces de intensidad (RE/RP): guarda sin re-render (nada más depende de ellas).
+  document.querySelectorAll('[data-bio-cruces]').forEach(el=>el.onchange=()=>{S.bio[el.getAttribute('data-bio-cruces')]=el.value;});
 
   // Antecedentes (expediente real): captura sin perder foco + guardar.
   document.querySelectorAll('[data-ant]').forEach(el=>el.oninput=()=>{if(!S.antForm)S.antForm={};S.antForm[el.getAttribute('data-ant')]=el.value;});
