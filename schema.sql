@@ -63,13 +63,36 @@ CREATE TABLE IF NOT EXISTS sherlock.antecedentes (
 );
 
 -- Estudios (laboratorio, imagen, patología, etc.)
+-- El PDF adjunto vive en disco (uploads/estudios/), no aquí: `archivo_ruta` es el
+-- nombre generado dentro de ese directorio y el resto son metadatos. Ver la
+-- migración 010 para por qué el binario no va en la base.
 CREATE TABLE IF NOT EXISTS sherlock.estudios (
-  id           serial PRIMARY KEY,
-  paciente_id  int,
-  categoria    text,
-  fecha        date,
-  descripcion  text,
-  archivo_url  text
+  id             serial PRIMARY KEY,
+  paciente_id    int,
+  categoria      text,
+  fecha          date,
+  descripcion    text,
+  archivo_url    text,
+  archivo_ruta   text,
+  archivo_nombre text,
+  archivo_mime   text,
+  archivo_bytes  int,
+  subido_por     int REFERENCES sherlock.medicos(id),
+  creado         timestamptz DEFAULT now()
+);
+
+-- Interconsultas: acceso de otro médico al expediente, otorgado por el principal.
+-- El expediente queda a nombre de pacientes.medico_id (médico tratante principal);
+-- aquí se registra a quién le dio acceso, quién lo autorizó y cuándo se revocó.
+-- Ver migración 009.
+CREATE TABLE IF NOT EXISTS sherlock.interconsultas (
+  id            serial PRIMARY KEY,
+  paciente_id   int NOT NULL REFERENCES sherlock.pacientes(id),
+  medico_id     int NOT NULL REFERENCES sherlock.medicos(id),
+  otorgado_por  int NOT NULL REFERENCES sherlock.medicos(id),
+  motivo        text,
+  creado        timestamptz NOT NULL DEFAULT now(),
+  revocado      timestamptz
 );
 
 -- Diagnósticos oncológicos (estadificación TNM / AJCC)
@@ -168,3 +191,10 @@ CREATE INDEX IF NOT EXISTS idx_notas_corrige_a       ON sherlock.notas_evolucion
 CREATE UNIQUE INDEX IF NOT EXISTS idx_medicos_ics_token ON sherlock.medicos (ics_token) WHERE ics_token IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tratamientos_paciente ON sherlock.tratamientos (paciente_id);
 CREATE INDEX IF NOT EXISTS idx_ciclos_tratamiento    ON sherlock.ciclos (tratamiento_id);
+-- Un solo permiso ACTIVO por (paciente, médico); parcial para poder re-otorgar
+-- después de revocar sin perder el renglón anterior. Ver migración 009.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_interconsulta_activa
+  ON sherlock.interconsultas (paciente_id, medico_id) WHERE revocado IS NULL;
+CREATE INDEX IF NOT EXISTS idx_interconsultas_medico
+  ON sherlock.interconsultas (medico_id) WHERE revocado IS NULL;
+CREATE INDEX IF NOT EXISTS idx_interconsultas_paciente ON sherlock.interconsultas (paciente_id);

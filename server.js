@@ -21,6 +21,7 @@ const crypto = require('crypto');
 const pool = require('./src/db');
 const { audit } = require('./src/audit');
 const { construirICS } = require('./src/ics');
+const multer = require('multer');
 const { verificarPassword, esHash, compararTextoPlano } = require('./src/passwords');
 const limite = require('./src/ratelimit');
 const PgSession = require('connect-pg-simple')(session);
@@ -28,6 +29,88 @@ const PgSession = require('connect-pg-simple')(session);
 const app = express();
 const PORT = parseInt(process.env.PORT || '3021', 10);
 const PUBLIC = path.join(__dirname, 'public');
+
+// --- Subida de PDFs de estudios ---
+// Los archivos NO viven en public/: ahí los serviría Express a cualquiera que
+// adivinara la URL. Viven fuera del árbol público y solo salen por
+// GET /api/estudios/:id/archivo, que valida sesión y acceso al expediente.
+const UPLOADS = path.join(__dirname, 'uploads', 'estudios');
+fs.mkdirSync(UPLOADS, { recursive: true });
+const MAX_PDF_MB = 20;
+
+const recibirArchivo = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, UPLOADS),
+    // Nombre generado, nunca el del usuario: quita de un golpe el path traversal
+    // ("../../etc/algo"), las colisiones y los nombres que revelan al paciente.
+    filename: (req, file, cb) => cb(null, crypto.randomBytes(16).toString('hex') + '.pdf'),
+  }),
+  limits: { fileSize: MAX_PDF_MB * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    // Primer filtro, barato. El de verdad es la firma del archivo, ya en disco:
+    // el mimetype lo manda el navegador y se puede mentir.
+    if (file.mimetype !== 'application/pdf') return cb(new Error('SOLO_PDF'));
+    cb(null, true);
+  },
+}).single('archivo');
+
+// Envoltura para que los errores de subida salgan como JSON —igual que el resto
+// de la API— y no como la página de error de Express.
+function subirPDF(req, res, next) {
+  recibirArchivo(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: `El PDF supera el límite de ${MAX_PDF_MB} MB.` });
+    }
+    if (err.message === 'SOLO_PDF') {
+      return res.status(400).json({ error: 'Solo se aceptan archivos PDF.' });
+    }
+    console.error('[subida de estudio]', err.message);
+    return res.status(400).json({ error: 'No se pudo recibir el archivo.' });
+  });
+}
+
+// Borra el archivo recién subido. Se llama en CADA salida temprana del handler
+// (paciente ajeno, PDF falso, error al guardar): multer ya escribió el archivo
+// antes de que corriera nada, así que sin esto cada intento fallido dejaría
+// basura en disco.
+function descartarSubida(req) {
+  if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
+}
+
+// ¿Es realmente un PDF? Todo PDF empieza con "%PDF-". Se comprueba sobre el
+// archivo ya escrito porque es el único dato que no depende de lo que dijo el
+// cliente.
+function esPDFReal(ruta) {
+  let fd;
+  try {
+    fd = fs.openSync(ruta, 'r');
+    const buf = Buffer.alloc(5);
+    const n = fs.readSync(fd, buf, 0, 5, 0);
+    return n === 5 && buf.toString('latin1') === '%PDF-';
+  } catch { return false; }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+// Nombre original saneado, solo para mostrarlo y para la descarga: sin rutas, sin
+// caracteres de control y acotado.
+function nombreSeguro(v) {
+  const base = path.basename(String(v || '')).replace(/[\u0000-\u001f\u007f"\\]/g, '').trim();
+  const limpio = base.slice(0, 120);
+  return limpio || 'estudio.pdf';
+}
+
+// Nombre tal como lo mandó el navegador. multer entrega `originalname` byte a byte
+// como latin1, así que un "patología.pdf" —que viaja en UTF-8— llega convertido en
+// "patologÃ­a.pdf" si se guarda tal cual. Se reinterpretan los bytes como UTF-8 y,
+// si no forman UTF-8 válido, se deja el original: así un nombre que de verdad
+// venía en latin1 no se rompe.
+function nombreRecibido(file) {
+  const crudo = String((file && file.originalname) || '');
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(crudo, 'latin1'));
+  } catch { return crudo; }
+}
 
 // Usuarios: [{ "u":"ssoto", "p":"scrypt$...", "role":"soto", "name":"Dr. Santos Soto", "spec":"..." }, ...]
 // El campo "p" debe ser un HASH generado con `node hash-password.js`.
@@ -201,23 +284,48 @@ async function ensureMedicoId(req, res, next) {
 
 // --- API de pacientes (todas protegidas y aisladas por medico_id) ---
 
-// Lista los pacientes del médico en sesión.
+// Lista los expedientes que el médico en sesión puede ver: los que están a su
+// nombre y aquellos en los que es interconsultante con permiso activo. Cada
+// renglón dice cuál de los dos es (`acceso`) y a nombre de quién está el
+// expediente (`medico_principal`), porque en la lista es donde el médico
+// distingue "mis pacientes" de "en los que me pidieron opinión".
 app.get('/api/pacientes', requireAuth, ensureMedicoId, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, nombre, sexo,
-              CASE WHEN fecha_nacimiento IS NULL THEN NULL
-                   ELSE date_part('year', age(fecha_nacimiento))::int END AS edad,
-              dx_resumen, estatus
-         FROM sherlock.pacientes
-        WHERE medico_id = $1
-        ORDER BY nombre`,
+      `SELECT p.id, p.nombre, p.sexo,
+              CASE WHEN p.fecha_nacimiento IS NULL THEN NULL
+                   ELSE date_part('year', age(p.fecha_nacimiento))::int END AS edad,
+              p.dx_resumen, p.estatus,
+              CASE WHEN p.medico_id = $1 THEN 'principal' ELSE 'interconsulta' END AS acceso,
+              m.nombre AS medico_principal
+         FROM sherlock.pacientes p
+         JOIN sherlock.medicos m ON m.id = p.medico_id
+        WHERE p.medico_id = $1
+           OR EXISTS (SELECT 1 FROM sherlock.interconsultas i
+                       WHERE i.paciente_id = p.id AND i.medico_id = $1
+                         AND i.revocado IS NULL)
+        ORDER BY p.nombre`,
       [req.session.user.medico_id]
     );
     res.json(rows);
   } catch (e) {
     console.error('[GET /api/pacientes]', e.message);
     res.status(500).json({ error: 'No se pudieron obtener los pacientes.' });
+  }
+});
+
+// Catálogo de médicos, para elegir a quién se transfiere un expediente o a quién
+// se le abre una interconsulta. Solo lo indispensable para poder elegir: ningún
+// dato de contacto ni del expediente de nadie.
+app.get('/api/medicos', requireAuth, ensureMedicoId, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, nombre, especialidad FROM sherlock.medicos ORDER BY nombre`
+    );
+    res.json(rows);
+  } catch (e) {
+    console.error('[GET /api/medicos]', e.message);
+    res.status(500).json({ error: 'No se pudo obtener la lista de médicos.' });
   }
 });
 
@@ -244,32 +352,236 @@ app.post('/api/pacientes', requireAuth, ensureMedicoId, async (req, res) => {
   }
 });
 
-// Devuelve un paciente del médico en sesión (404 si no es suyo).
+// Devuelve un paciente accesible por el médico en sesión (404 si no lo es).
 app.get('/api/pacientes/:id', requireAuth, ensureMedicoId, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de paciente no es válido.' });
   try {
-    const { rows } = await pool.query(
-      'SELECT * FROM sherlock.pacientes WHERE id = $1 AND medico_id = $2',
-      [id, req.session.user.medico_id]
-    );
-    if (!rows.length) {
-      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+    const paciente = await getPacienteAccesible(id, req.session.user.medico_id);
+    if (!paciente) {
+      return res.status(404).json({ error: 'Paciente no encontrado o no disponible para este médico.' });
     }
-    await audit(req, 'ver', 'paciente', id);
-    res.json(rows[0]);
+    await audit(req, 'ver', 'paciente', id, { acceso: paciente._acceso });
+    res.json(paciente);
   } catch (e) {
     console.error('[GET /api/pacientes/:id]', e.message);
     res.status(500).json({ error: 'No se pudo obtener el paciente.' });
   }
 });
 
+// --- Interconsultas: quién más puede ver este expediente ---
+//
+// El expediente está a nombre del médico tratante principal. Estas tres rutas son
+// cómo ese médico reparte y retira el acceso; por eso las tres exigen ser el
+// principal (getPacientePrincipal), no basta con poder ver el expediente.
+
+// Lista los accesos del expediente: quién es el principal y qué interconsultantes
+// tienen permiso vigente. La ve cualquiera con acceso —incluido el
+// interconsultante— a propósito: quién más está leyendo el expediente no es un
+// secreto para los médicos que lo atienden.
+app.get('/api/pacientes/:id/interconsultas', requireAuth, ensureMedicoId, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de paciente no es válido.' });
+  try {
+    const paciente = await getPacienteAccesible(id, req.session.user.medico_id);
+    if (!paciente) {
+      return res.status(404).json({ error: 'Paciente no encontrado o no disponible para este médico.' });
+    }
+    const { rows } = await pool.query(
+      `SELECT i.id, i.medico_id, i.motivo, i.creado,
+              m.nombre AS medico, m.especialidad,
+              o.nombre AS otorgado_por
+         FROM sherlock.interconsultas i
+         JOIN sherlock.medicos m ON m.id = i.medico_id
+         JOIN sherlock.medicos o ON o.id = i.otorgado_por
+        WHERE i.paciente_id = $1 AND i.revocado IS NULL
+        ORDER BY i.creado`,
+      [id]
+    );
+    const { rows: prin } = await pool.query(
+      `SELECT m.id, m.nombre, m.especialidad
+         FROM sherlock.pacientes p JOIN sherlock.medicos m ON m.id = p.medico_id
+        WHERE p.id = $1`,
+      [id]
+    );
+    res.json({
+      acceso: paciente._acceso,
+      principal: prin.length ? prin[0] : null,
+      interconsultantes: rows,
+    });
+  } catch (e) {
+    console.error('[GET /api/pacientes/:id/interconsultas]', e.message);
+    res.status(500).json({ error: 'No se pudieron obtener los accesos del expediente.' });
+  }
+});
+
+// Otorga acceso de interconsulta a otro médico. Solo el principal.
+app.post('/api/pacientes/:id/interconsultas', requireAuth, ensureMedicoId, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de paciente no es válido.' });
+  const b = req.body || {};
+  const destino = parseInt(b.medico_id, 10);
+  if (!Number.isInteger(destino)) return res.status(400).json({ error: 'El médico de la interconsulta no es válido.' });
+  const yo = req.session.user.medico_id;
+  try {
+    const paciente = await getPacientePrincipal(id, yo);
+    if (!paciente) {
+      // 404 y no 403: quien no es el principal no tiene por qué distinguir entre
+      // "no existe" y "existe pero no es tuyo".
+      return res.status(404).json({ error: 'Solo el médico tratante principal puede compartir este expediente.' });
+    }
+    if (destino === yo) {
+      return res.status(400).json({ error: 'El expediente ya está a su nombre: no necesita interconsulta.' });
+    }
+    const { rows: med } = await pool.query('SELECT id, nombre FROM sherlock.medicos WHERE id = $1', [destino]);
+    if (!med.length) return res.status(400).json({ error: 'El médico indicado no existe.' });
+
+    // ON CONFLICT sobre el índice parcial: volver a otorgar un acceso que ya está
+    // activo no duplica el permiso ni es un error, simplemente no hace nada.
+    const { rows } = await pool.query(
+      `INSERT INTO sherlock.interconsultas (paciente_id, medico_id, otorgado_por, motivo)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (paciente_id, medico_id) WHERE revocado IS NULL DO NOTHING
+       RETURNING *`,
+      [id, destino, yo, (b.motivo || '').trim() || null]
+    );
+    if (rows.length) {
+      await audit(req, 'otorgar', 'interconsulta', rows[0].id,
+        { paciente_id: id, medico: med[0].nombre });
+    }
+    res.status(201).json({ ok: true, ya_tenia_acceso: rows.length === 0 });
+  } catch (e) {
+    console.error('[POST /api/pacientes/:id/interconsultas]', e.message);
+    res.status(500).json({ error: 'No se pudo compartir el expediente.' });
+  }
+});
+
+// Revoca un acceso de interconsulta. Solo el principal. No borra el renglón: lo
+// sella con `revocado`, para que quede en el expediente quién tuvo acceso y hasta
+// cuándo.
+app.delete('/api/pacientes/:id/interconsultas/:icId', requireAuth, ensureMedicoId, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const icId = parseInt(req.params.icId, 10);
+  if (!Number.isInteger(id) || !Number.isInteger(icId)) {
+    return res.status(400).json({ error: 'El identificador no es válido.' });
+  }
+  try {
+    const paciente = await getPacientePrincipal(id, req.session.user.medico_id);
+    if (!paciente) {
+      return res.status(404).json({ error: 'Solo el médico tratante principal puede retirar accesos.' });
+    }
+    const { rowCount } = await pool.query(
+      `UPDATE sherlock.interconsultas SET revocado = now()
+        WHERE id = $1 AND paciente_id = $2 AND revocado IS NULL`,
+      [icId, id]
+    );
+    if (!rowCount) return res.status(404).json({ error: 'Acceso no encontrado o ya revocado.' });
+    await audit(req, 'revocar', 'interconsulta', icId, { paciente_id: id });
+    res.json({ ok: true, id: icId });
+  } catch (e) {
+    console.error('[DELETE /api/pacientes/:id/interconsultas/:icId]', e.message);
+    res.status(500).json({ error: 'No se pudo retirar el acceso.' });
+  }
+});
+
+// Transfiere el expediente a otro médico tratante principal. Solo el principal
+// actual. Con `conservar_acceso` el médico saliente se queda como interconsultante
+// —el caso normal cuando el cirujano capturó a la paciente de la oncóloga y sigue
+// operándola—; sin él, deja de ver el expediente en cuanto se guarda.
+app.post('/api/pacientes/:id/transferir', requireAuth, ensureMedicoId, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de paciente no es válido.' });
+  const b = req.body || {};
+  const destino = parseInt(b.medico_id, 10);
+  if (!Number.isInteger(destino)) return res.status(400).json({ error: 'El médico destino no es válido.' });
+  const yo = req.session.user.medico_id;
+  const conservar = b.conservar_acceso === true || b.conservar_acceso === 'true';
+
+  const client = await pool.connect();
+  try {
+    const paciente = await getPacientePrincipal(id, yo);
+    if (!paciente) {
+      return res.status(404).json({ error: 'Solo el médico tratante principal puede transferir el expediente.' });
+    }
+    if (destino === yo) return res.status(400).json({ error: 'El expediente ya está a su nombre.' });
+    const { rows: med } = await pool.query('SELECT id, nombre FROM sherlock.medicos WHERE id = $1', [destino]);
+    if (!med.length) return res.status(400).json({ error: 'El médico destino no existe.' });
+
+    // Las tres escrituras van juntas: un expediente a medio transferir —cambiado
+    // de dueño pero sin el acceso que se prometió conservar— dejaría al médico
+    // saliente fuera de un paciente que sigue atendiendo.
+    await client.query('BEGIN');
+    await client.query('UPDATE sherlock.pacientes SET medico_id = $1 WHERE id = $2', [destino, id]);
+    // Si el destino ya era interconsultante, su permiso sobra: ahora es el principal.
+    await client.query(
+      `UPDATE sherlock.interconsultas SET revocado = now()
+        WHERE paciente_id = $1 AND medico_id = $2 AND revocado IS NULL`,
+      [id, destino]
+    );
+    if (conservar) {
+      await client.query(
+        `INSERT INTO sherlock.interconsultas (paciente_id, medico_id, otorgado_por, motivo)
+         VALUES ($1, $2, $2, $3)
+         ON CONFLICT (paciente_id, medico_id) WHERE revocado IS NULL DO NOTHING`,
+        [id, yo, 'Médico tratante anterior']
+      );
+    }
+    await client.query('COMMIT');
+
+    await audit(req, 'transferir', 'paciente', id,
+      { de: yo, a: destino, medico_destino: med[0].nombre, conserva_acceso: conservar });
+    res.json({ ok: true, medico_id: destino, conserva_acceso: conservar });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[POST /api/pacientes/:id/transferir]', e.message);
+    res.status(500).json({ error: 'No se pudo transferir el expediente.' });
+  } finally {
+    client.release();
+  }
+});
+
 // --- API de expediente clínico (todas aisladas por medico_id) ---
 
-// Regla de oro: confirma que el paciente exista y pertenezca al médico en sesión.
-// Devuelve la fila del paciente, o null si no es suyo / no existe (el llamador
-// responde 404 para no filtrar la existencia de pacientes de otros médicos).
-async function getPacientePropio(id, medicoId) {
+// Regla de oro: confirma que el paciente exista y que el médico en sesión pueda
+// verlo. Hay DOS formas de poder verlo, y la diferencia importa:
+//
+//   'principal'     — el expediente está a su nombre (pacientes.medico_id).
+//   'interconsulta' — otro médico se lo compartió y el permiso sigue activo.
+//
+// Es el modelo del expediente del hospital: el expediente queda a nombre del
+// médico tratante principal y los interconsultantes entran con su permiso. El
+// nivel viaja en `_acceso` porque las rutas ADMINISTRATIVAS (transferir el
+// expediente, otorgar o revocar accesos) son solo del principal — para eso está
+// getPacientePrincipal, más abajo.
+//
+// Devuelve la fila del paciente, o null si no existe / no tiene acceso (el
+// llamador responde 404: un 403 confirmaría que el paciente existe).
+// Condición SQL de acceso, en un solo lugar: "el médico del parámetro $n puede
+// ver el expediente del paciente con este alias". Va como fragmento y no como
+// función de JS porque tiene que poder entrar dentro de un JOIN o un EXISTS de
+// otra consulta. `alias` y `n` los pone el código de aquí, nunca la petición: no
+// hay valor del usuario que llegue a concatenarse (los que sí, siguen siendo $1,
+// $2, … como en el resto del archivo).
+const puedeVer = (alias, n) => `(${alias}.medico_id = $${n}
+      OR EXISTS (SELECT 1 FROM sherlock.interconsultas i
+                  WHERE i.paciente_id = ${alias}.id AND i.medico_id = $${n}
+                    AND i.revocado IS NULL))`;
+
+async function getPacienteAccesible(id, medicoId) {
+  const { rows } = await pool.query(
+    `SELECT p.*,
+            CASE WHEN p.medico_id = $2 THEN 'principal' ELSE 'interconsulta' END AS _acceso
+       FROM sherlock.pacientes p
+      WHERE p.id = $1 AND ${puedeVer('p', 2)}`,
+    [id, medicoId]
+  );
+  return rows.length ? rows[0] : null;
+}
+
+// Igual que la anterior, pero SOLO si el expediente está a nombre del médico en
+// sesión. Es el candado de lo administrativo: un interconsultante aporta al
+// expediente (notas, estudios, tratamientos), pero no lo cede ni reparte accesos.
+async function getPacientePrincipal(id, medicoId) {
   const { rows } = await pool.query(
     'SELECT * FROM sherlock.pacientes WHERE id = $1 AND medico_id = $2',
     [id, medicoId]
@@ -277,23 +589,39 @@ async function getPacientePropio(id, medicoId) {
   return rows.length ? rows[0] : null;
 }
 
-// Expediente consolidado de un paciente del médico en sesión (404 si no es suyo).
+// Expediente consolidado de un paciente accesible por el médico en sesión.
+// Incluye a nombre de quién está (`medico_principal`), con qué nivel entra el
+// médico en sesión (`acceso`) y quiénes son los interconsultantes vigentes: el
+// front lo necesita en cada pantalla del expediente, así que viaja aquí y no en
+// una petición aparte.
 app.get('/api/pacientes/:id/expediente', requireAuth, ensureMedicoId, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de paciente no es válido.' });
   try {
-    const paciente = await getPacientePropio(id, req.session.user.medico_id);
+    const paciente = await getPacienteAccesible(id, req.session.user.medico_id);
     if (!paciente) {
-      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+      return res.status(404).json({ error: 'Paciente no encontrado o no disponible para este médico.' });
     }
-    const [ant, est, dx] = await Promise.all([
+    const [ant, est, dx, prin, inter] = await Promise.all([
       pool.query('SELECT * FROM sherlock.antecedentes WHERE paciente_id = $1', [id]),
       pool.query('SELECT * FROM sherlock.estudios WHERE paciente_id = $1 ORDER BY fecha DESC, id DESC', [id]),
       pool.query('SELECT * FROM sherlock.diagnosticos WHERE paciente_id = $1 ORDER BY creado DESC LIMIT 1', [id]),
+      pool.query(
+        `SELECT m.id, m.nombre, m.especialidad
+           FROM sherlock.pacientes p JOIN sherlock.medicos m ON m.id = p.medico_id
+          WHERE p.id = $1`, [id]),
+      pool.query(
+        `SELECT i.id, i.medico_id, i.motivo, i.creado, m.nombre AS medico, m.especialidad
+           FROM sherlock.interconsultas i JOIN sherlock.medicos m ON m.id = i.medico_id
+          WHERE i.paciente_id = $1 AND i.revocado IS NULL
+          ORDER BY i.creado`, [id]),
     ]);
-    await audit(req, 'ver', 'expediente', id);
+    await audit(req, 'ver', 'expediente', id, { acceso: paciente._acceso });
     res.json({
       paciente,
+      acceso: paciente._acceso,
+      medico_principal: prin.rows.length ? prin.rows[0] : null,
+      interconsultantes: inter.rows,
       antecedentes: ant.rows.length ? ant.rows[0] : null,
       estudios: est.rows,
       diagnostico: dx.rows.length ? dx.rows[0] : null,
@@ -313,9 +641,9 @@ app.put('/api/pacientes/:id/antecedentes', requireAuth, ensureMedicoId, async (r
     return res.status(400).json({ error: 'El campo "datos" es obligatorio y debe ser un objeto.' });
   }
   try {
-    const paciente = await getPacientePropio(id, req.session.user.medico_id);
+    const paciente = await getPacienteAccesible(id, req.session.user.medico_id);
     if (!paciente) {
-      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+      return res.status(404).json({ error: 'Paciente no encontrado o no disponible para este médico.' });
     }
     const { rows } = await pool.query(
       `INSERT INTO sherlock.antecedentes (paciente_id, datos)
@@ -348,9 +676,9 @@ app.post('/api/pacientes/:id/diagnostico', requireAuth, ensureMedicoId, async (r
     if (Number.isFinite(n)) tamano_mm = n;
   }
   try {
-    const paciente = await getPacientePropio(id, req.session.user.medico_id);
+    const paciente = await getPacienteAccesible(id, req.session.user.medico_id);
     if (!paciente) {
-      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+      return res.status(404).json({ error: 'Paciente no encontrado o no disponible para este médico.' });
     }
     const { rows } = await pool.query(
       `INSERT INTO sherlock.diagnosticos
@@ -373,44 +701,104 @@ app.post('/api/pacientes/:id/diagnostico', requireAuth, ensureMedicoId, async (r
 });
 
 // Agrega un estudio (laboratorio, imagen, patología, etc.) al paciente.
-app.post('/api/pacientes/:id/estudios', requireAuth, ensureMedicoId, async (req, res) => {
+// Acepta las dos formas: JSON como siempre, o multipart con el PDF en el campo
+// "archivo". multer solo actúa sobre multipart, así que el camino viejo sigue
+// funcionando sin cambios.
+app.post('/api/pacientes/:id/estudios', requireAuth, ensureMedicoId, subirPDF, async (req, res) => {
   const id = parseInt(req.params.id, 10);
-  if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de paciente no es válido.' });
+  if (!Number.isInteger(id)) { descartarSubida(req); return res.status(400).json({ error: 'El id de paciente no es válido.' }); }
   const b = req.body || {};
   const categoria = String(b.categoria || '').trim();
-  if (!categoria) return res.status(400).json({ error: 'La categoría del estudio es obligatoria.' });
+  if (!categoria) { descartarSubida(req); return res.status(400).json({ error: 'La categoría del estudio es obligatoria.' }); }
   try {
-    const paciente = await getPacientePropio(id, req.session.user.medico_id);
+    const paciente = await getPacienteAccesible(id, req.session.user.medico_id);
     if (!paciente) {
-      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+      descartarSubida(req);
+      return res.status(404).json({ error: 'Paciente no encontrado o no disponible para este médico.' });
+    }
+    // El archivo ya está en disco: si no es un PDF de verdad, se borra aquí y no
+    // llega a quedar registrado en el expediente.
+    if (req.file && !esPDFReal(req.file.path)) {
+      descartarSubida(req);
+      return res.status(400).json({ error: 'El archivo no es un PDF válido.' });
     }
     const { rows } = await pool.query(
-      `INSERT INTO sherlock.estudios (paciente_id, categoria, fecha, descripcion, archivo_url)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO sherlock.estudios
+         (paciente_id, categoria, fecha, descripcion, archivo_url,
+          archivo_ruta, archivo_nombre, archivo_mime, archivo_bytes, subido_por)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
-      [id, categoria, b.fecha || null, b.descripcion || null, b.archivo_url || null]
+      [id, categoria, b.fecha || null, b.descripcion || null, b.archivo_url || null,
+       req.file ? path.basename(req.file.path) : null,
+       req.file ? nombreSeguro(nombreRecibido(req.file)) : null,
+       req.file ? 'application/pdf' : null,
+       req.file ? req.file.size : null,
+       req.file ? req.session.user.medico_id : null]
     );
     const est = rows[0];
-    await audit(req, 'agregar', 'estudio', est.id, { categoria: est.categoria });
+    await audit(req, 'agregar', 'estudio', est.id,
+      { categoria: est.categoria, con_archivo: !!req.file });
     res.status(201).json(est);
   } catch (e) {
+    descartarSubida(req);
     console.error('[POST /api/pacientes/:id/estudios]', e.message);
     res.status(500).json({ error: 'No se pudo agregar el estudio.' });
+  }
+});
+
+// Entrega el PDF de un estudio. Es la ÚNICA salida de los archivos subidos: pasa
+// por sesión, por acceso al expediente (principal o interconsulta) y queda en la
+// bitácora, porque abrir un estudio es acceso a datos clínicos (NOM-004).
+app.get('/api/estudios/:id/archivo', requireAuth, ensureMedicoId, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de estudio no es válido.' });
+  try {
+    const { rows } = await pool.query(
+      `SELECT e.id, e.archivo_ruta, e.archivo_nombre
+         FROM sherlock.estudios e
+         JOIN sherlock.pacientes p ON p.id = e.paciente_id
+        WHERE e.id = $1 AND ${puedeVer('p', 2)}`,
+      [id, req.session.user.medico_id]
+    );
+    if (!rows.length || !rows[0].archivo_ruta) {
+      return res.status(404).json({ error: 'Estudio sin archivo o no disponible para este médico.' });
+    }
+    // El nombre viene de la base, pero se resuelve igual contra el directorio y se
+    // comprueba que el resultado siga dentro: si un día una ruta llegara torcida a
+    // la tabla, aquí no sale del corral.
+    const ruta = path.join(UPLOADS, path.basename(rows[0].archivo_ruta));
+    if (!ruta.startsWith(UPLOADS + path.sep) || !fs.existsSync(ruta)) {
+      return res.status(404).json({ error: 'El archivo del estudio ya no está disponible.' });
+    }
+    await audit(req, 'ver', 'estudio_archivo', id);
+    const nombre = nombreSeguro(rows[0].archivo_nombre || 'estudio.pdf');
+    res.set({
+      'Content-Type': 'application/pdf',
+      // El navegador no debe adivinar el tipo: un archivo servido como otra cosa
+      // podría ejecutarse en el origen de la aplicación.
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(nombre)}`,
+      'Cache-Control': 'private, no-store',
+    });
+    fs.createReadStream(ruta).pipe(res);
+  } catch (e) {
+    console.error('[GET /api/estudios/:id/archivo]', e.message);
+    res.status(500).json({ error: 'No se pudo obtener el archivo del estudio.' });
   }
 });
 
 // --- API de notas de evolución y tratamiento (todas aisladas por medico_id) ---
 
 // Regla de oro para tratamientos: confirma que el tratamiento exista y que su
-// paciente pertenezca al médico en sesión, vía join tratamiento->paciente->medico.
-// Devuelve la fila del tratamiento, o null si no es suyo / no existe (el llamador
-// responde 404 para no filtrar la existencia de tratamientos de otros médicos).
+// paciente sea accesible para el médico en sesión (a su nombre o compartido),
+// vía join tratamiento->paciente. Devuelve la fila del tratamiento, o null si no
+// lo es / no existe (el llamador responde 404 para no filtrar su existencia).
 async function getTratamientoPropio(tratId, medicoId) {
   const { rows } = await pool.query(
     `SELECT t.*
        FROM sherlock.tratamientos t
        JOIN sherlock.pacientes p ON p.id = t.paciente_id
-      WHERE t.id = $1 AND p.medico_id = $2`,
+      WHERE t.id = $1 AND ${puedeVer('p', 2)}`,
     [tratId, medicoId]
   );
   return rows.length ? rows[0] : null;
@@ -421,9 +809,9 @@ app.get('/api/pacientes/:id/notas', requireAuth, ensureMedicoId, async (req, res
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de paciente no es válido.' });
   try {
-    const paciente = await getPacientePropio(id, req.session.user.medico_id);
+    const paciente = await getPacienteAccesible(id, req.session.user.medico_id);
     if (!paciente) {
-      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+      return res.status(404).json({ error: 'Paciente no encontrado o no disponible para este médico.' });
     }
     const { rows } = await pool.query(
       `SELECT * FROM sherlock.notas_evolucion
@@ -453,9 +841,9 @@ app.post('/api/pacientes/:id/notas', requireAuth, ensureMedicoId, async (req, re
     fechaHora = String(b.fecha_hora);
   }
   try {
-    const paciente = await getPacientePropio(id, req.session.user.medico_id);
+    const paciente = await getPacienteAccesible(id, req.session.user.medico_id);
     if (!paciente) {
-      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+      return res.status(404).json({ error: 'Paciente no encontrado o no disponible para este médico.' });
     }
     const { rows } = await pool.query(
       `INSERT INTO sherlock.notas_evolucion
@@ -487,11 +875,11 @@ app.get('/api/notas/:notaId', requireAuth, ensureMedicoId, async (req, res) => {
       `SELECT n.*
          FROM sherlock.notas_evolucion n
          JOIN sherlock.pacientes p ON p.id = n.paciente_id
-        WHERE n.id = $1 AND p.medico_id = $2`,
+        WHERE n.id = $1 AND ${puedeVer('p', 2)}`,
       [notaId, req.session.user.medico_id]
     );
     if (!rows.length) {
-      return res.status(404).json({ error: 'Nota no encontrada o no pertenece a este médico.' });
+      return res.status(404).json({ error: 'Nota no encontrada o no disponible para este médico.' });
     }
     await audit(req, 'ver', 'nota_evolucion', notaId);
     res.json(rows[0]);
@@ -527,11 +915,11 @@ app.post('/api/notas/:notaId/correccion', requireAuth, ensureMedicoId, async (re
       `SELECT n.id, n.paciente_id, n.fecha_hora, n.corrige_a
          FROM sherlock.notas_evolucion n
          JOIN sherlock.pacientes p ON p.id = n.paciente_id
-        WHERE n.id = $1 AND p.medico_id = $2`,
+        WHERE n.id = $1 AND ${puedeVer('p', 2)}`,
       [notaId, req.session.user.medico_id]
     );
     if (!orig.length) {
-      return res.status(404).json({ error: 'Nota no encontrada o no pertenece a este médico.' });
+      return res.status(404).json({ error: 'Nota no encontrada o no disponible para este médico.' });
     }
     // Modelo plano: sin cadenas de correcciones de correcciones (ver migración 006).
     if (orig[0].corrige_a != null) {
@@ -578,9 +966,9 @@ app.get('/api/pacientes/:id/tratamientos', requireAuth, ensureMedicoId, async (r
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'El id de paciente no es válido.' });
   try {
-    const paciente = await getPacientePropio(id, req.session.user.medico_id);
+    const paciente = await getPacienteAccesible(id, req.session.user.medico_id);
     if (!paciente) {
-      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+      return res.status(404).json({ error: 'Paciente no encontrado o no disponible para este médico.' });
     }
     const { rows } = await pool.query(
       `SELECT t.*,
@@ -612,9 +1000,9 @@ app.post('/api/pacientes/:id/tratamientos', requireAuth, ensureMedicoId, async (
   if (!nombre) return res.status(400).json({ error: 'El nombre del tratamiento es obligatorio.' });
   const activo = (b.activo == null) ? true : !!b.activo;
   try {
-    const paciente = await getPacientePropio(id, req.session.user.medico_id);
+    const paciente = await getPacienteAccesible(id, req.session.user.medico_id);
     if (!paciente) {
-      return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+      return res.status(404).json({ error: 'Paciente no encontrado o no disponible para este médico.' });
     }
     const { rows } = await pool.query(
       `INSERT INTO sherlock.tratamientos (paciente_id, medico_id, nombre, tipo, activo)
@@ -642,7 +1030,7 @@ app.post('/api/tratamientos/:tratId/ciclos', requireAuth, ensureMedicoId, async 
   try {
     const trat = await getTratamientoPropio(tratId, req.session.user.medico_id);
     if (!trat) {
-      return res.status(404).json({ error: 'Tratamiento no encontrado o no pertenece a este médico.' });
+      return res.status(404).json({ error: 'Tratamiento no encontrado o no disponible para este médico.' });
     }
     const { rows } = await pool.query(
       `INSERT INTO sherlock.ciclos (tratamiento_id, numero, fecha, notas)
@@ -670,7 +1058,7 @@ app.delete('/api/tratamientos/:tratId/ciclos/:cicloId', requireAuth, ensureMedic
   try {
     const trat = await getTratamientoPropio(tratId, req.session.user.medico_id);
     if (!trat) {
-      return res.status(404).json({ error: 'Tratamiento no encontrado o no pertenece a este médico.' });
+      return res.status(404).json({ error: 'Tratamiento no encontrado o no disponible para este médico.' });
     }
     const { rowCount } = await pool.query(
       'DELETE FROM sherlock.ciclos WHERE id = $1 AND tratamiento_id = $2',
@@ -703,7 +1091,7 @@ app.get('/api/citas', requireAuth, ensureMedicoId, async (req, res) => {
               c.paciente_id, p.nombre AS paciente_nombre
          FROM sherlock.citas c
          LEFT JOIN sherlock.pacientes p
-                ON p.id = c.paciente_id AND p.medico_id = c.medico_id
+                ON p.id = c.paciente_id AND ${puedeVer('p', 1)}
         WHERE c.medico_id = $1
           AND c.inicio >= COALESCE($2::date, current_date)
           AND c.inicio <  COALESCE($2::date, current_date) + interval '1 day'
@@ -752,9 +1140,9 @@ app.post('/api/citas', requireAuth, ensureMedicoId, async (req, res) => {
   }
   try {
     if (pacienteId != null) {
-      const paciente = await getPacientePropio(pacienteId, req.session.user.medico_id);
+      const paciente = await getPacienteAccesible(pacienteId, req.session.user.medico_id);
       if (!paciente) {
-        return res.status(404).json({ error: 'Paciente no encontrado o no pertenece a este médico.' });
+        return res.status(404).json({ error: 'Paciente no encontrado o no disponible para este médico.' });
       }
     }
     const { rows } = await pool.query(
@@ -782,7 +1170,7 @@ app.delete('/api/citas/:id', requireAuth, ensureMedicoId, async (req, res) => {
       [id, req.session.user.medico_id]
     );
     if (!rowCount) {
-      return res.status(404).json({ error: 'Cita no encontrada o no pertenece a este médico.' });
+      return res.status(404).json({ error: 'Cita no encontrada o no disponible para este médico.' });
     }
     await audit(req, 'eliminar', 'cita', id);
     res.json({ ok: true, id });
@@ -836,7 +1224,7 @@ app.get('/agenda.ics', async (req, res) => {
       `SELECT c.id, c.inicio, c.fin, c.tipo, c.paciente_id, p.nombre AS paciente_nombre
          FROM sherlock.citas c
          LEFT JOIN sherlock.pacientes p
-                ON p.id = c.paciente_id AND p.medico_id = c.medico_id
+                ON p.id = c.paciente_id AND ${puedeVer('p', 1)}
         WHERE c.medico_id = $1
           AND c.inicio >= now() - ($2 || ' days')::interval
           AND c.inicio <= now() + ($3 || ' days')::interval
@@ -939,7 +1327,7 @@ app.get('/api/citas/:id', requireAuth, ensureMedicoId, async (req, res) => {
         WHERE c.id = $1 AND c.medico_id = $2`,
       [id, req.session.user.medico_id]
     );
-    if (!rows.length) return res.status(404).json({ error: 'Cita no encontrada o no pertenece a este médico.' });
+    if (!rows.length) return res.status(404).json({ error: 'Cita no encontrada o no disponible para este médico.' });
     res.json(rows[0]);
   } catch (e) {
     console.error('[GET /api/citas/:id]', e.message);
@@ -971,8 +1359,8 @@ app.get('/api/buscar', requireAuth, ensureMedicoId, async (req, res) => {
     const [pac, dx, est] = await Promise.all([
       pool.query(
         `SELECT id, nombre, dx_resumen
-           FROM sherlock.pacientes
-          WHERE medico_id = $1
+           FROM sherlock.pacientes p
+          WHERE ${puedeVer('p', 1)}
             AND (${sqlSinAcentos('nombre')} ILIKE $2 OR ${sqlSinAcentos('dx_resumen')} ILIKE $2)
           ORDER BY nombre
           LIMIT $3`,
@@ -983,7 +1371,7 @@ app.get('/api/buscar', requireAuth, ensureMedicoId, async (req, res) => {
                 d.tipo_histologico, d.subtipo, d.etapa, d.fecha
            FROM sherlock.diagnosticos d
            JOIN sherlock.pacientes p ON p.id = d.paciente_id
-          WHERE p.medico_id = $1
+          WHERE ${puedeVer('p', 1)}
             AND (${sqlSinAcentos('d.tipo_histologico')} ILIKE $2
               OR ${sqlSinAcentos('d.subtipo')} ILIKE $2
               OR ${sqlSinAcentos('d.etapa')} ILIKE $2)
@@ -996,7 +1384,7 @@ app.get('/api/buscar', requireAuth, ensureMedicoId, async (req, res) => {
                 e.categoria, e.fecha, e.descripcion
            FROM sherlock.estudios e
            JOIN sherlock.pacientes p ON p.id = e.paciente_id
-          WHERE p.medico_id = $1
+          WHERE ${puedeVer('p', 1)}
             AND (${sqlSinAcentos('e.descripcion')} ILIKE $2 OR ${sqlSinAcentos('e.categoria')} ILIKE $2)
           ORDER BY e.fecha DESC NULLS LAST, e.id DESC
           LIMIT $3`,

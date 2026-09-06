@@ -6,3 +6,9 @@ node_modules/
 data.json
 dist/
 *.log
+
+# PDFs de estudios subidos: datos clínicos, nunca al repo (se respaldan aparte).
+uploads/
+
+# Worktrees temporales de Claude Code: nunca al repo.
+.claude/worktrees/
