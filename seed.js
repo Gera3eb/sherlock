@@ -43,9 +43,16 @@ async function main() {
     );
   }
 
-  // 2) Pacientes + citas: SOLO si no hay pacientes (evita duplicados al re-correr)
+  // 2) Pacientes + citas de ejemplo: hay que PEDIRLOS con --con-ejemplos.
+  //    Antes bastaba con que la tabla estuviera vacía, y eso significa que un
+  //    despliegue nuevo sembraba pacientes inventados en un sistema clínico. El
+  //    Dr. Soto pidió retirarlos de dev justamente por eso: quedan para desarrollo
+  //    local, a petición expresa.
+  const conEjemplos = process.argv.includes('--con-ejemplos');
   const { rows: cnt } = await pool.query('SELECT COUNT(*)::int AS n FROM sherlock.pacientes');
-  if (cnt[0].n === 0) {
+  if (!conEjemplos) {
+    console.log(`Médicos listos. Pacientes de ejemplo: omitidos (usa --con-ejemplos para sembrarlos).`);
+  } else if (cnt[0].n === 0) {
     const idsPorNombre = {};
     for (const p of PACIENTES) {
       const medicoId = await medicoIdPorUsername(p.medico);

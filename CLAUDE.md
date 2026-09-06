@@ -10,7 +10,9 @@ Hospital Ángeles Pedregal, CDMX). Plataforma desarrollada por **Simplexity**.
 SPA estática (HTML/CSS/JS sin build, un solo `app.html`) servida por Express detrás de un
 **login real por usuario** (un usuario por médico), con **Postgres (Neon)** como
 almacenamiento. Los datos clínicos persisten en la base; el aislamiento entre médicos se
-hace en la API por `medico_id`. Credenciales y secretos viven SOLO en `.env`.
+hace en la API: cada expediente está a nombre de un **médico tratante principal** y otro
+médico solo entra si él le abre una **interconsulta** (ver más abajo). Credenciales y
+secretos viven SOLO en `.env`.
 
 Sigue siendo un **demo funcional**: no ha operado con pacientes reales y hay pendientes de
 endurecimiento (ver "Pendientes conocidos").
@@ -28,26 +30,29 @@ endurecimiento (ver "Pendientes conocidos").
 ```
 server.js          Express: login, sesión, API REST, sirve la SPA protegida
 migrate.js         schema.sql + migraciones pendientes (idempotente) · node migrate.js
-seed.js            siembra médicos + pacientes/citas de ejemplo · node seed.js
+seed.js            siembra los médicos · node seed.js  (ejemplos: --con-ejemplos)
 hash-password.js   genera el hash de scrypt para USERS del .env · node hash-password.js
 schema.sql         esquema completo del schema "sherlock" (idempotente)
 migrations/        cambios incrementales aplicados sobre schema.sql
 src/
   db.js            Pool de pg desde DATABASE_URL (ver nota del pooler abajo)
   audit.js         helper audit() -> escribe en sherlock.auditoria (nunca tumba la request)
+scripts/
+  limpiar-pacientes-prueba.js  retiro puntual de pacientes de prueba (respalda antes)
+uploads/estudios/  PDFs subidos (NO en repo; se respaldan aparte)
 public/
   login.html       página de acceso (pública)
   app.html         la SPA; el servidor inyecta la identidad en /*__USER__*/null
 .env               (NO en repo) PORT, COOKIE_SECURE, SESSION_SECRET, DATABASE_URL, USERS
 .env.example       formato de variables
 ```
-Deps: `express`, `express-session`, `dotenv`, `pg`.
+Deps: `express`, `express-session`, `dotenv`, `pg`, `connect-pg-simple`, `multer`.
 
 ## Base de datos (Neon Postgres)
 Schema dedicado **`sherlock`**. Tablas: `medicos`, `pacientes`, `citas`, `antecedentes`,
-`estudios`, `diagnosticos`, `notas_evolucion`, `tratamientos`, `ciclos`, `auditoria`, y
-`migraciones` (bitácora de qué archivo de `migrations/` ya se aplicó) y `session` (sesiones
-de express-session; no lleva datos clínicos).
+`estudios`, `diagnosticos`, `notas_evolucion`, `tratamientos`, `ciclos`, `interconsultas`,
+`auditoria`, y `migraciones` (bitácora de qué archivo de `migrations/` ya se aplicó) y
+`session` (sesiones de express-session; no lleva datos clínicos).
 Diseño orientado a NOM-004, NOM-024 y LFPDPPP; `auditoria` es **solo-append** (nunca
 UPDATE/DELETE sobre ella).
 
@@ -61,7 +66,9 @@ UPDATE/DELETE sobre ella).
 Aplicar esquema y sembrar:
 ```
 node migrate.js    # schema.sql + las migraciones pendientes de migrations/
-node seed.js       # médicos siempre; pacientes/citas solo si la tabla está vacía
+node seed.js       # solo los médicos. Con --con-ejemplos siembra además pacientes
+                   # y citas de ejemplo (desarrollo local; NUNCA en un servidor con
+                   # pacientes reales — el Dr. Soto pidió retirarlos de dev).
 ```
 
 `migrate.js` hace las dos cosas: ejecuta `schema.sql` (que crea el esquema desde cero) y
@@ -87,9 +94,12 @@ Públicas: `GET /login` · `POST /login` (valida contra `USERS` del `.env`) · `
 Protegidas (`requireAuth`); las de datos además pasan por `ensureMedicoId` y filtran por
 `medico_id`:
 - `GET /` SPA (inyecta `{u,role,name,spec}` del usuario) · `GET /api/me`
-- Pacientes: `GET|POST /api/pacientes` · `GET /api/pacientes/:id`
+- Pacientes: `GET|POST /api/pacientes` · `GET /api/pacientes/:id` · `GET /api/medicos`
+- Titularidad: `GET|POST /api/pacientes/:id/interconsultas` ·
+  `DELETE /api/pacientes/:id/interconsultas/:icId` · `POST /api/pacientes/:id/transferir`
 - Expediente: `GET /api/pacientes/:id/expediente` · `PUT /api/pacientes/:id/antecedentes` ·
-  `POST /api/pacientes/:id/diagnostico` · `POST /api/pacientes/:id/estudios`
+  `POST /api/pacientes/:id/diagnostico` · `POST /api/pacientes/:id/estudios` (JSON o
+  multipart con PDF) · `GET /api/estudios/:id/archivo`
 - Evolución: `GET|POST /api/pacientes/:id/notas` · `GET /api/notas/:notaId` ·
   `POST /api/notas/:notaId/correccion` ·
   `GET|POST /api/pacientes/:id/tratamientos` · `POST /api/tratamientos/:tratId/ciclos` ·
@@ -184,6 +194,48 @@ El enlace del evento apunta a `/?cita=<id>`. Para que funcione desde el teléfon
 conserva el destino en `?next=` y `POST /login` lo restaura — validando que sea una ruta
 **local**, o el login se volvería un redirector abierto para phishing.
 
+### Médico tratante principal e interconsultas
+Es el modelo del expediente electrónico del hospital, como lo describió el Dr. Soto: el
+expediente **queda a nombre del médico tratante principal** (`pacientes.medico_id`) y los
+médicos de interconsulta de otras especialidades **entran solo con su permiso**
+(`sherlock.interconsultas`, migración 009).
+
+Reglas que no hay que romper:
+- **Un solo punto de control.** `getPacienteAccesible()` es la puerta de todos los datos
+  clínicos y devuelve el nivel en `_acceso` (`principal` | `interconsulta`);
+  `getPacientePrincipal()` es el candado de lo administrativo. La condición SQL vive en un
+  único fragmento (`puedeVer(alias, n)`) que se reusa en lista, buscador, notas,
+  tratamientos, archivos y el JOIN de la agenda — si se agrega una consulta que lea datos
+  del paciente, usa ese fragmento, no escribas el filtro a mano.
+- **El interconsultante aporta, no administra.** Puede leer todo y escribir notas, estudios,
+  tratamientos y diagnóstico. Lo que NO puede: transferir el expediente ni otorgar o
+  revocar accesos. Eso es de quien lo tiene a su nombre.
+- **Revocar no borra el renglón**, lo sella con `revocado`. Quién tuvo acceso al expediente
+  y en qué periodo es justo lo que un expediente clínico debe poder responder después. El
+  índice único es **parcial** (`WHERE revocado IS NULL`) para poder re-otorgar sin perder
+  el historial.
+- **Transferir con `conservar_acceso`** deja al médico saliente como interconsultante; sin
+  él, deja de ver el expediente en cuanto se guarda (el front lo devuelve a la lista, para
+  no dejarlo mirando algo que la siguiente petición ya le negaría).
+- Las **citas siguen siendo del médico que las agenda** (`citas.medico_id`), no del dueño
+  del expediente: una interconsulta no mueve la agenda de nadie.
+
+### Archivos PDF de estudios
+`POST /api/pacientes/:id/estudios` acepta multipart con el campo `archivo` (además del JSON
+de siempre, que no cambió) y `GET /api/estudios/:id/archivo` lo entrega.
+
+- **El binario NO va en la base**: vive en `uploads/estudios/` (fuera de `public/`, ignorado
+  por git) con nombre aleatorio, y en la tabla quedan solo los metadatos. La contra, que hay
+  que decir en voz alta: **ese directorio se respalda aparte**; un dump de Postgres ya no
+  basta para restaurar el expediente completo.
+- **La ruta autenticada es la única salida.** Nada se sirve como estático: valida sesión,
+  valida acceso al expediente (principal o interconsulta) y **audita cada apertura**.
+- **Se verifica la firma `%PDF-`** del archivo ya escrito, no el `mimetype` — ese lo manda
+  el cliente y se puede mentir. Y **cada salida temprana borra el archivo** (`descartarSubida`),
+  porque multer lo escribe antes de que corra el handler.
+- **El nombre original se reinterpreta a UTF-8** (`nombreRecibido`): multer entrega
+  `originalname` en latin1 y "patología.pdf" se guardaba como "patologÃ­a.pdf".
+
 ### Buscador global
 `GET /api/buscar` busca en pacientes, diagnósticos y estudios, todo acotado por `medico_id`
 (diagnósticos y estudios lo alcanzan por JOIN a pacientes). Dos cosas que no hay que perder
@@ -202,13 +254,16 @@ solo, sobre `#q-panel` (ver `pintarPanel()`).
   no existe rol `asistente` real ni permisos diferenciados.
 - **Paciente demo `'sara'`** sigue en el front con id de texto y sostiene un camino de
   código paralelo (`esNumId()`); retirar cuando la BD sea la única fuente.
-- **Estudios**: solo aceptan `archivo_url`, falta subida de archivos.
 - **Editar/corregir**: las notas de evolución ya se corrigen por addendum (arriba). Falta
   para pacientes, estudios, antecedentes y diagnósticos — que son datos clínicos, así que
   conviene el mismo criterio de addendum antes que un UPDATE. Borrar: solo citas y ciclos.
 - **Motor de estadificación**: solo mama. Próstata/colon/pulmón están parametrizados pero
   sin catálogos (el seed incluye un paciente de próstata que aún no se puede estadificar).
-- **Antes de pacientes reales**: queda `ssl.rejectUnauthorized:false` en `src/db.js`.
+- **Antes de pacientes reales**: queda `ssl.rejectUnauthorized:false` en `src/db.js`, y
+  falta **respaldo del directorio `uploads/`** (los PDF no están en el dump de la base).
+- **`npm audit`** reporta 3 moderadas (DoS en `qs`/`body-parser`) que ya están en la última
+  versión de la rama 4.x: solo se cierran subiendo a **Express 5**, que es un salto mayor y
+  no se hizo por las buenas. Anotado para hacerse a propósito, no de pasada.
 - La vista **Seguridad** describe objetivos de diseño (cifrado en reposo, marca de agua,
   respaldo cifrado), no funcionalidad entregada. Cuidar cómo se presenta al cliente.
 - La tarjeta **"Auto-agenda del paciente"** de la Agenda sigue siendo maqueta: el paciente no
