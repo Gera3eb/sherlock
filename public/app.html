@@ -416,6 +416,11 @@ const S={
   notaAbierta:null,
   antForm:null, antGuardando:false, antMsg:'',
   estudForm:null, estudGuardando:false, estudMsg:'', estudAbierto:false,
+  // PDF elegido para el estudio (objeto File; no persiste en el DOM entre renders).
+  estudArchivo:null,
+  // Expediente compartido: catálogo de médicos y modal de compartir/transferir.
+  medicos:[], medicosCargados:false,
+  modalComp:false, compForm:null, compGuardando:false, compMsg:'',
   npForm:{ nombre:'', sexo:'F', fecha_nacimiento:'', telefono:'', correo:'', seguro:'', dx_resumen:'' },
   stage:{ size:18, skin:false, chest:false, inflam:false, axilar:true, fixed:false, intmam:false, infracl:false, supracl:false, mets:'no', edition:'8' },
   bio:{ re:90, rp:80, re_cruces:'3+', rp_cruces:'2+', her2:'neg', ki67:22, grade:'2', subtype:0, sentinel:'si', axdiss:'no', gl_sin:'', gl_con:'' }
@@ -995,21 +1000,117 @@ async function guardarAntecedentes(){
 
 // Agrega un estudio (laboratorio, patología, imagen, molecular) vía POST.
 // Validación mínima: categoría y fecha. archivo_url es opcional (sin subida).
+// --- Expediente compartido: catálogo de médicos, interconsulta y transferencia ---
+
+// Catálogo de médicos para los selectores. Se pide una sola vez por sesión.
+async function cargarMedicos(){
+  if(S.medicosCargados) return;
+  S.medicosCargados=true; // se marca antes: evita dos peticiones en vuelo
+  try{
+    const r=await fetch('/api/medicos',{credentials:'same-origin'});
+    S.medicos = r.ok ? await r.json() : [];
+  }catch(e){ S.medicos=[]; }
+  render();
+}
+
+function abrirModalCompartir(){
+  S.modalComp=true; S.compMsg=''; S.compForm={ medico_id:'', motivo:'', conservar:true };
+  cargarMedicos();
+  render();
+}
+function cerrarModalCompartir(){ S.modalComp=false; S.compForm=null; S.compMsg=''; render(); }
+
+// Otorga la interconsulta y recarga el expediente (la barra y la lista del modal
+// se repintan con el acceso ya aplicado).
+async function otorgarInterconsulta(){
+  const f=S.compForm||{};
+  if(!f.medico_id){ S.compMsg='Elija al médico que recibirá el acceso.'; render(); return; }
+  S.compGuardando=true; S.compMsg=''; render();
+  try{
+    const r=await fetch(`/api/pacientes/${S.patient}/interconsultas`,{
+      method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
+      body:JSON.stringify({ medico_id:Number(f.medico_id), motivo:f.motivo||null })
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){ S.compGuardando=false; S.compMsg=data.error||'No se pudo compartir el expediente.'; render(); return; }
+    await cargarExpediente(S.patient, false);
+    S.compGuardando=false;
+    S.compMsg = data.ya_tenia_acceso ? 'Ese médico ya tenía acceso.' : 'Acceso otorgado ✓';
+    S.compForm={ ...f, medico_id:'', motivo:'' };
+    render();
+  }catch(e){ S.compGuardando=false; S.compMsg='No se pudo conectar con el servidor.'; render(); }
+}
+
+async function revocarInterconsulta(icId){
+  S.compGuardando=true; S.compMsg=''; render();
+  try{
+    const r=await fetch(`/api/pacientes/${S.patient}/interconsultas/${icId}`,{
+      method:'DELETE', credentials:'same-origin'
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){ S.compGuardando=false; S.compMsg=data.error||'No se pudo retirar el acceso.'; render(); return; }
+    await cargarExpediente(S.patient, false);
+    S.compGuardando=false; S.compMsg='Acceso retirado ✓'; render();
+  }catch(e){ S.compGuardando=false; S.compMsg='No se pudo conectar con el servidor.'; render(); }
+}
+
+// Transfiere el expediente. Si el médico no conserva acceso, deja de verlo en
+// cuanto se guarda: por eso se vuelve a la lista de pacientes en ese caso, en vez
+// de dejarlo mirando un expediente que la siguiente petición ya le negaría.
+async function transferirExpediente(){
+  const f=S.compForm||{};
+  if(!f.medico_id){ S.compMsg='Elija al médico que recibirá el expediente.'; render(); return; }
+  S.compGuardando=true; S.compMsg=''; render();
+  try{
+    const r=await fetch(`/api/pacientes/${S.patient}/transferir`,{
+      method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
+      body:JSON.stringify({ medico_id:Number(f.medico_id), conservar_acceso:f.conservar!==false })
+    });
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){ S.compGuardando=false; S.compMsg=data.error||'No se pudo transferir el expediente.'; render(); return; }
+    S.compGuardando=false;
+    if(data.conserva_acceso){
+      await cargarExpediente(S.patient, false);
+      S.compMsg='Expediente transferido ✓ · usted queda como interconsultante';
+      render();
+    } else {
+      S.modalComp=false; S.compForm=null; S.compMsg='';
+      S.pacientesCargados=false; S.expediente=null; S.expFor=null;
+      go('pacientes');
+    }
+  }catch(e){ S.compGuardando=false; S.compMsg='No se pudo conectar con el servidor.'; render(); }
+}
+
 async function guardarEstudio(){
   if(!esNumId(S.patient)) return; // pacientes demo no persisten
   const f=S.estudForm || {};
   if(!f.categoria || !f.fecha){ S.estudMsg='Categoría y fecha son obligatorias.'; render(); return; }
   S.estudGuardando=true; S.estudMsg=''; render();
   try{
-    const r=await fetch(`/api/pacientes/${S.patient}/estudios`,{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      credentials:'same-origin',
-      body:JSON.stringify({
-        categoria:f.categoria, fecha:f.fecha,
-        descripcion:f.descripcion||null, archivo_url:f.archivo_url||null
-      })
-    });
+    // Con PDF va como multipart (el archivo no cabe en JSON); sin él, como
+    // siempre. El servidor acepta las dos formas.
+    let opciones;
+    if(S.estudArchivo){
+      const fd=new FormData();
+      fd.append('categoria',f.categoria);
+      fd.append('fecha',f.fecha);
+      if(f.descripcion) fd.append('descripcion',f.descripcion);
+      if(f.archivo_url) fd.append('archivo_url',f.archivo_url);
+      fd.append('archivo',S.estudArchivo);
+      // Sin Content-Type a mano: el navegador tiene que poner el boundary.
+      opciones={ method:'POST', credentials:'same-origin', body:fd };
+    } else {
+      opciones={
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        credentials:'same-origin',
+        body:JSON.stringify({
+          categoria:f.categoria, fecha:f.fecha,
+          descripcion:f.descripcion||null, archivo_url:f.archivo_url||null
+        })
+      };
+    }
+    const r=await fetch(`/api/pacientes/${S.patient}/estudios`, opciones);
     const data=await r.json().catch(()=>({}));
     if(!r.ok){
       S.estudGuardando=false;
@@ -1018,7 +1119,7 @@ async function guardarEstudio(){
     }
     // Éxito: recarga el expediente y cierra el formulario (el nuevo aparece en la lista).
     await cargarExpediente(S.patient, false);
-    S.estudGuardando=false; S.estudAbierto=false; S.estudForm=null; S.estudMsg=''; render();
+    S.estudGuardando=false; S.estudAbierto=false; S.estudForm=null; S.estudArchivo=null; S.estudMsg=''; render();
   }catch(e){
     S.estudGuardando=false;
     S.estudMsg='No se pudo conectar con el servidor.';
@@ -1034,7 +1135,7 @@ function viewPatients(){
       <div><div class="h-eyebrow">Expedientes</div><div class="h1" style="margin-top:6px">Pacientes</div></div>
       <button class="btn btn-primary" data-nuevo>${ICN.plus} Nuevo paciente</button>
     </div>
-    <p class="lead" style="margin-bottom:18px">Cada médico ve únicamente a sus pacientes. <span class="chip chip-line" style="margin-left:4px">Filtrado por: ${esc(curDoc().name)}</span></p>`;
+    <p class="lead" style="margin-bottom:18px">Sus expedientes y aquellos en los que le pidieron interconsulta. <span class="chip chip-line" style="margin-left:4px">Filtrado por: ${esc(curDoc().name)}</span></p>`;
 
   let body;
   if(S.cargando && !S.pacientes.length){
@@ -1051,12 +1152,19 @@ function viewPatients(){
       const sexo=p.sexo==='F'?'Femenino':(p.sexo==='M'?'Masculino':'—');
       const edad=(p.edad!=null)?` · ${p.edad} años`:'';
       const estatus=p.estatus?esc(p.estatus):'Sin estatus';
+      // El expediente de otro médico se distingue de un vistazo: aquí es donde el
+      // médico separa "mis pacientes" de "en los que me pidieron opinión".
+      const inter = p.acceso==='interconsulta'
+        ? `<span class="chip chip-info" title="Expediente a nombre de ${esc(p.medico_principal||'otro médico')}">Interconsulta</span>` : '';
+      const dePor = p.acceso==='interconsulta' && p.medico_principal
+        ? `<span style="color:var(--muted)"> · expediente de ${esc(p.medico_principal)}</span>` : '';
       return `<button class="patient-row" data-go="paciente" data-pat="${esc(p.id)}">
         <div class="p-av" style="background:${pcolor(i)}">${esc(iniciales(p.nombre))}</div>
         <div style="flex:1">
           <div style="font-weight:600;font-size:14px">${esc(p.nombre)} <span style="color:var(--muted);font-weight:400">· ${sexo}${edad}</span></div>
-          <div style="font-size:12.5px;color:var(--slate);margin-top:2px">${p.dx_resumen?esc(p.dx_resumen):'Sin diagnóstico registrado'}</div>
+          <div style="font-size:12.5px;color:var(--slate);margin-top:2px">${p.dx_resumen?esc(p.dx_resumen):'Sin diagnóstico registrado'}${dePor}</div>
         </div>
+        ${inter}
         <span class="chip ${nueva?'chip-brass':'chip-ok'}">${estatus}</span>
         <span style="color:var(--muted)">${ICN.glass}</span>
       </button>`;
@@ -1292,10 +1400,100 @@ function viewPatient(){
       </div>
       <span class="chip ${hBrass?'chip-brass':'chip-ok'}">${hTag}</span>
     </div>
+    ${barraExpediente()}
     <div class="tabs">
       ${tabs.map(t=>`<button class="tab ${S.tab===t[0]?'on':''}" data-tab="${t[0]}">${t[2]}${t[1]}</button>`).join('')}
     </div>
-    <div class="fade">${tabRouter(p)}</div>`;
+    <div class="fade">${tabRouter(p)}</div>
+    ${S.modalComp?modalCompartir():''}`;
+}
+
+// Barra de titularidad del expediente: a nombre de quién está, quién más tiene
+// acceso y —solo para el principal— el botón para compartirlo o transferirlo.
+// Es la traducción a pantalla del modelo del hospital: el expediente tiene un
+// dueño visible y los demás entran con su permiso.
+function barraExpediente(){
+  const exp=S.expediente;
+  if(!exp || !exp.paciente || String(exp.paciente.id)!==String(S.patient)) return '';
+  const soyPrincipal = exp.acceso==='principal';
+  const prin=exp.medico_principal||{};
+  const inter=Array.isArray(exp.interconsultantes)?exp.interconsultantes:[];
+
+  const titular = soyPrincipal
+    ? `<span style="color:var(--slate)">Expediente a su nombre</span>`
+    : `<span class="chip chip-info" style="margin-right:8px">Interconsulta</span>
+       <span style="color:var(--slate)">Expediente a nombre de <b style="color:var(--ink)">${esc(prin.nombre||'otro médico')}</b></span>`;
+
+  const conAcceso = inter.length
+    ? `<span style="color:var(--muted)"> · con acceso: ${inter.map(i=>esc(i.medico)).join(', ')}</span>` : '';
+
+  const boton = soyPrincipal
+    ? `<button class="btn btn-ghost" data-compartir style="padding:7px 12px;font-size:12.5px">${ICN.users} Compartir o transferir</button>`
+    : `<span style="font-size:11.5px;color:var(--muted)">Puede aportar al expediente; cederlo o repartir accesos es del médico principal.</span>`;
+
+  return `<div class="card" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:11px 16px;margin-bottom:14px;background:var(--paper-2)">
+    <div style="flex:1;min-width:240px;font-size:12.5px">${titular}${conAcceso}</div>
+    ${boton}
+  </div>`;
+}
+
+// Modal para compartir (interconsulta) o transferir el expediente. Las dos
+// acciones viven juntas porque son la misma decisión vista desde dos lados:
+// "que otro médico lo vea" o "que otro médico lo lleve".
+function modalCompartir(){
+  const exp=S.expediente||{};
+  const f=S.compForm||{};
+  const inter=Array.isArray(exp.interconsultantes)?exp.interconsultantes:[];
+  const yo=(exp.medico_principal||{}).id;
+  const opciones=(S.medicos||[]).filter(m=>m.id!==yo);
+  const ok=/✓/.test(S.compMsg);
+
+  const listaActual = inter.length
+    ? inter.map(i=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)">
+        <div style="flex:1"><b style="font-size:13px">${esc(i.medico)}</b>
+          <div style="font-size:11.5px;color:var(--muted)">${esc(i.especialidad||'—')}${i.motivo?` · ${esc(i.motivo)}`:''}</div></div>
+        <button class="btn btn-ghost" data-revocar="${esc(i.id)}" style="padding:5px 10px;font-size:11.5px">Retirar acceso</button>
+      </div>`).join('')
+    : `<p style="margin:6px 0 0;color:var(--muted);font-size:12.5px">Nadie más tiene acceso a este expediente.</p>`;
+
+  const selector = opciones.length
+    ? `<select class="select" data-comp="medico_id">
+        <option value="">Selecciona un médico…</option>
+        ${opciones.map(m=>`<option value="${esc(m.id)}" ${String(f.medico_id)===String(m.id)?'selected':''}>${esc(m.nombre)}${m.especialidad?` · ${esc(m.especialidad)}`:''}</option>`).join('')}
+       </select>`
+    : `<p style="margin:0;color:var(--muted);font-size:12.5px">No hay otros médicos registrados.</p>`;
+
+  return `<div class="np-overlay" data-comp-cancel style="position:fixed;inset:0;background:rgba(13,40,42,.45);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50">
+    <div class="card" style="width:100%;max-width:560px;max-height:90vh;overflow:auto" onclick="event.stopPropagation()">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--line)">
+        <div class="section-title">Compartir o transferir el expediente</div>
+        <p class="lead" style="margin:6px 0 0;font-size:12.5px">${esc((exp.paciente||{}).nombre||'')}</p>
+      </div>
+      <div style="padding:18px 22px">
+        <div class="section-title" style="margin-bottom:8px">Con acceso ahora</div>
+        ${listaActual}
+
+        <div class="section-title" style="margin:20px 0 8px">Dar acceso a otro médico</div>
+        <div class="field">${selector}</div>
+        <div class="field"><label>Motivo <span class="hint">· opcional</span></label>
+          <input class="input" data-comp="motivo" value="${esc(f.motivo||'')}" placeholder="Valoración oncológica, quimioterapia…"></div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+          <button class="btn btn-primary" data-comp-otorgar ${S.compGuardando?'disabled':''}>${ICN.plus} Dar interconsulta</button>
+          <button class="btn btn-brass" data-comp-transferir ${S.compGuardando?'disabled':''}>Transferir expediente</button>
+        </div>
+
+        <label style="display:flex;align-items:center;gap:9px;margin-top:12px;font-size:12.5px;cursor:pointer">
+          <input type="checkbox" data-comp-chk ${f.conservar!==false?'checked':''} style="width:16px;height:16px;accent-color:var(--petrol)">
+          Al transferir, conservar mi acceso como interconsultante</label>
+        <div class="note" style="margin-top:12px">${ICN.info}<div><b>Transferir</b> cambia a nombre de quién queda el expediente: el otro médico pasa a ser el tratante principal y solo él podrá volver a repartir accesos.</div></div>
+        ${S.compMsg?`<p style="margin:12px 0 0;font-size:13px;font-weight:600;color:${ok?'var(--ok)':'#A23A3A'}">${esc(S.compMsg)}</p>`:''}
+      </div>
+      <div style="padding:14px 22px;border-top:1px solid var(--line);display:flex;justify-content:flex-end">
+        <button class="btn btn-ghost" data-comp-cancel>Cerrar</button>
+      </div>
+    </div>
+  </div>`;
 }
 function tabRouter(p){
   switch(S.tab){
@@ -1610,6 +1808,11 @@ const ESTUD_CATS=[
   {slug:'molecular',   label:'Moleculares / genéticos', icon:ICN.dna},
 ];
 function fechaCorta(v){ return v ? String(v).slice(0,10) : '—'; }
+// Tamaño de archivo legible (para confirmar al médico qué PDF va a subir).
+function pesoLegible(b){
+  const n=Number(b)||0;
+  return n>=1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB';
+}
 // Fecha (date) a DD/MM/YYYY sin desfase de zona horaria (solo reordena el ISO).
 function fechaDMY(v){
   if(!v) return '—';
@@ -1641,8 +1844,15 @@ function tabEstudiosReal(estudios){
   const norm=c=>String(c||'').trim().toLowerCase();
   const tbl=(c)=>{
     const rows=estudios.filter(e=>norm(e.categoria)===c.slug);
+    // El PDF subido manda sobre la URL externa: es el archivo que vive aquí y sale
+    // por la ruta autenticada, no por un enlace suelto.
+    const archivo=r=> r.archivo_ruta
+      ? `<a class="chip chip-info" href="/api/estudios/${esc(r.id)}/archivo" target="_blank" rel="noopener" title="${esc(r.archivo_nombre||'PDF')}">${ICN.pdf} Ver PDF</a>`
+      : (r.archivo_url
+          ? `<a class="chip chip-line" href="${esc(r.archivo_url)}" target="_blank" rel="noopener">Enlace externo</a>`
+          : '<span class="chip chip-line">—</span>');
     const body = rows.length
-      ? rows.map(r=>`<tr><td class="mono" style="color:var(--slate)">${esc(fechaCorta(r.fecha))}</td><td>${esc(r.descripcion||'—')}</td><td style="text-align:right">${r.archivo_url?`<a class="chip chip-info" href="${esc(r.archivo_url)}" target="_blank" rel="noopener">${ICN.pdf} Ver</a>`:'<span class="chip chip-line">—</span>'}</td></tr>`).join('')
+      ? rows.map(r=>`<tr><td class="mono" style="color:var(--slate)">${esc(fechaCorta(r.fecha))}</td><td>${esc(r.descripcion||'—')}</td><td style="text-align:right">${archivo(r)}</td></tr>`).join('')
       : `<tr><td colspan="3" style="color:var(--muted);font-size:12.5px;padding:14px 16px">Sin estudios registrados</td></tr>`;
     return `<div class="card" style="overflow:hidden">
       <div style="display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--line)">
@@ -1658,7 +1868,7 @@ function tabEstudiosReal(estudios){
     </div>
     ${S.estudAbierto?formEstudio():''}
     <div class="grid2" style="gap:16px">${ESTUD_CATS.map(tbl).join('')}</div>
-    <div class="note" style="margin-top:16px">${ICN.shield}<div>Los PDF y las imágenes (incluidas fotografías clínicas del paciente) se almacenan cifradas, con acceso restringido al médico tratante y registro de cada apertura.</div></div>`;
+    <div class="note" style="margin-top:16px">${ICN.shield}<div>Los PDF salen únicamente por una ruta con sesión: los ve el médico tratante y los interconsultantes con acceso vigente, y cada apertura queda en la bitácora. El cifrado en reposo está en la lista de endurecimiento, todavía no entregado.</div></div>`;
 }
 // Formulario de alta de estudio (mismo lenguaje visual del resto del expediente).
 function formEstudio(){
@@ -1677,11 +1887,15 @@ function formEstudio(){
     </div>
     <div class="field"><label>Descripción</label>
       <textarea class="input" data-estud="descripcion" rows="2" style="min-height:60px;resize:vertical" placeholder="Hallazgos, resultado, nota…">${esc(f.descripcion||'')}</textarea></div>
-    <div class="field"><label>URL del archivo <span class="hint">· opcional</span></label>
-      <input class="input" type="url" data-estud="archivo_url" value="${esc(f.archivo_url||'')}" placeholder="https://…  (la subida de archivos llega después)"></div>
+    <div class="field"><label>Archivo PDF <span class="hint">· opcional · hasta 20 MB</span></label>
+      <input class="input" type="file" accept="application/pdf,.pdf" data-estud-file style="padding:9px">
+      ${S.estudArchivo?`<div style="font-size:12px;color:var(--ok);margin-top:6px">${ICN.pdf} ${esc(S.estudArchivo.name)} · ${pesoLegible(S.estudArchivo.size)}</div>`:''}</div>
+    <div class="field"><label>URL del archivo <span class="hint">· opcional · si el estudio vive en otro sistema</span></label>
+      <input class="input" type="url" data-estud="archivo_url" value="${esc(f.archivo_url||'')}" placeholder="https://…"></div>
     <div style="display:flex;align-items:center;justify-content:flex-end;gap:14px;margin-top:4px">
       ${S.estudMsg?`<span style="font-size:13px;color:${ok?'var(--ok)':'#A23A3A'}">${esc(S.estudMsg)}</span>`:''}
       <button class="btn btn-ghost" data-estud-cancel>Cancelar</button>
+      ${S.estudArchivo?`<button class="btn btn-ghost" data-estud-quitar-file style="padding:8px 12px">Quitar PDF</button>`:''}
       <button class="btn btn-primary" data-guardar-estud ${S.estudGuardando?'disabled':''}>${S.estudGuardando?'Guardando…':'Guardar estudio'}</button>
     </div>
   </div>`;
@@ -2652,9 +2866,28 @@ function bind(){
 
   // Estudios (expediente real): captura sin perder foco + abrir/cerrar/guardar.
   document.querySelectorAll('[data-estud]').forEach(el=>el.oninput=el.onchange=()=>{if(!S.estudForm)S.estudForm={};S.estudForm[el.getAttribute('data-estud')]=el.value;});
-  document.querySelectorAll('[data-estud-toggle]').forEach(el=>el.onclick=()=>{S.estudAbierto=!S.estudAbierto; if(S.estudAbierto&&!S.estudForm)S.estudForm={categoria:'',fecha:'',descripcion:'',archivo_url:''}; S.estudMsg=''; render();});
-  document.querySelectorAll('[data-estud-cancel]').forEach(el=>el.onclick=()=>{S.estudAbierto=false; S.estudForm=null; S.estudMsg=''; render();});
+  document.querySelectorAll('[data-estud-toggle]').forEach(el=>el.onclick=()=>{S.estudAbierto=!S.estudAbierto; if(S.estudAbierto&&!S.estudForm)S.estudForm={categoria:'',fecha:'',descripcion:'',archivo_url:''}; S.estudArchivo=null; S.estudMsg=''; render();});
+  document.querySelectorAll('[data-estud-cancel]').forEach(el=>el.onclick=()=>{S.estudAbierto=false; S.estudForm=null; S.estudArchivo=null; S.estudMsg=''; render();});
+  // PDF del estudio: el File se guarda en el estado (no se puede prellenar un
+  // input[type=file] al re-renderizar, así que la fuente de verdad es S.estudArchivo).
+  document.querySelectorAll('[data-estud-file]').forEach(el=>el.onchange=()=>{
+    const f=el.files&&el.files[0];
+    if(!f){ S.estudArchivo=null; render(); return; }
+    if(f.type!=='application/pdf' && !/\.pdf$/i.test(f.name)){ S.estudArchivo=null; S.estudMsg='Solo se aceptan archivos PDF.'; render(); return; }
+    if(f.size>20*1024*1024){ S.estudArchivo=null; S.estudMsg='El PDF supera el límite de 20 MB.'; render(); return; }
+    S.estudArchivo=f; S.estudMsg=''; render();
+  });
+  document.querySelectorAll('[data-estud-quitar-file]').forEach(el=>el.onclick=()=>{S.estudArchivo=null; render();});
   document.querySelectorAll('[data-guardar-estud]').forEach(el=>el.onclick=()=>guardarEstudio());
+
+  // Expediente compartido: abrir/cerrar el modal, otorgar, revocar y transferir.
+  document.querySelectorAll('[data-compartir]').forEach(el=>el.onclick=()=>abrirModalCompartir());
+  document.querySelectorAll('[data-comp-cancel]').forEach(el=>el.onclick=()=>cerrarModalCompartir());
+  document.querySelectorAll('[data-comp]').forEach(el=>el.oninput=el.onchange=()=>{if(!S.compForm)S.compForm={};S.compForm[el.getAttribute('data-comp')]=el.value;});
+  document.querySelectorAll('[data-comp-chk]').forEach(el=>el.onchange=()=>{if(!S.compForm)S.compForm={};S.compForm.conservar=el.checked;});
+  document.querySelectorAll('[data-comp-otorgar]').forEach(el=>el.onclick=()=>otorgarInterconsulta());
+  document.querySelectorAll('[data-comp-transferir]').forEach(el=>el.onclick=()=>transferirExpediente());
+  document.querySelectorAll('[data-revocar]').forEach(el=>el.onclick=()=>revocarInterconsulta(el.getAttribute('data-revocar')));
 
   // Guardar diagnóstico (expediente real)
   document.querySelectorAll('[data-guardar-dx]').forEach(el=>el.onclick=()=>guardarDiagnostico());
